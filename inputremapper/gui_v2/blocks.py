@@ -260,6 +260,14 @@ def shape(chain: Chain) -> tuple[Any, ...]:
     return tuple(result)
 
 
+# The one field of the blocks that aren't engine functions. An output key is a key
+# name, shown bare (a plain `0` must not turn into `"0"`).
+_PSEUDO_ARG = {
+    "symbol": ArgSpec("symbol", ArgKind.SYMBOL, True),
+    "raw": ArgSpec("code", ArgKind.VALUE, True, accepts_str=True),
+}
+
+
 class _Field:
     """One argument's entry, kept so that it can be rewritten in place."""
 
@@ -561,7 +569,7 @@ class BlockEditor(Gtk.ScrolledWindow):
                 path,
                 index,
                 0,
-                ArgSpec("code", ArgKind.VALUE, True, accepts_str=True),
+                _PSEUDO_ARG[call.op if call.op in _PSEUDO_ARG else "raw"],
                 None,
             )
         elif spec.spread:
