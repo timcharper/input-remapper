@@ -45,6 +45,24 @@ class TestBlockOps(unittest.TestCase):
             self.assertEqual(call.op, op)
             print_chain((call,))
 
+    def test_new_key_blocks_start_empty_and_block_applying(self) -> None:
+        from inputremapper.gui_v2.document import Entry, InputRef, Trigger
+        from inputremapper.gui_v2.render import RenderError, entry_to_mapping
+
+        def entry(*then: Call) -> Entry:
+            return Entry(trigger=Trigger(inputs=(InputRef(1, 30),)), then=then)
+
+        self.assertEqual(default_call("key_down").args, ("",))
+        for call in (
+            default_call("key_down"),
+            default_call("set"),
+            default_call("repeat"),
+            Call.make("repeat", 2, (default_call("key"),)),
+        ):
+            with self.assertRaises(RenderError):
+                entry_to_mapping(entry(call))
+        entry_to_mapping(entry(Call.make("key_down", "BTN_LEFT")))
+
     def test_insert_and_remove_at_top_level(self) -> None:
         chain = parse_text("key(a).key(c)")
         chain = insert_call(chain, (), 1, Call.make("key", "b"))
@@ -105,6 +123,7 @@ class TestBlockOps(unittest.TestCase):
 
     def test_spread_blocks(self) -> None:
         chain = (default_call("hold_keys"),)
+        chain = set_arg(chain, (), 0, 0, "KEY_A")
         chain = set_arg(chain, (), 0, 1, "KEY_B")
         self.assertEqual(text(chain), "hold_keys(KEY_A, KEY_B)")
         chain = remove_spread_arg(chain, (), 0, 0)

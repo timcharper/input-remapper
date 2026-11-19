@@ -36,7 +36,7 @@ from inputremapper.gui_v2.tree import Call, Chain, Value, Var, is_chain
 ChainPath = tuple[tuple[int, int], ...]
 
 # What a new block starts with, per kind of argument.
-_DEFAULT_SYMBOL = "KEY_A"
+_DEFAULT_SYMBOL = ""
 
 
 def default_value(spec: ArgSpec) -> Value:

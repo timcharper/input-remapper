@@ -38,7 +38,8 @@ from inputremapper.gui_v2.macro_text import (
     parse_text,
     print_chain,
 )
-from inputremapper.gui_v2.tree import Call
+from inputremapper.gui_v2.schema import SCHEMA, ArgKind
+from inputremapper.gui_v2.tree import Call, Chain, Var
 
 RENDERED_PREFIX = "[v2 read-only] "
 
@@ -58,10 +59,39 @@ def is_rendered_name(preset_name: str) -> bool:
     return preset_name.startswith(RENDERED_PREFIX)
 
 
+def _first_gap(chain: Chain) -> str | None:
+    """Describe the first block that is missing something, or None if complete."""
+    for call in chain:
+        spec = SCHEMA.get(call.op)
+        if spec is None:
+            continue
+        for index, value in enumerate(call.args):
+            arg = spec.args[0 if spec.spread else index]
+            if arg.kind is ArgKind.SYMBOL and value == "":
+                return f'a "{call.op}" block has no key chosen'
+            if (
+                arg.kind is ArgKind.VARIABLE
+                and isinstance(value, Var)
+                and value.name == ""
+            ):
+                return f'a "{call.op}" block has no variable chosen'
+            if isinstance(value, tuple):
+                if arg.required and not value:
+                    return f'a "{call.op}" block is empty'
+                inner = _first_gap(cast("Chain", value))
+                if inner is not None:
+                    return inner
+    return None
+
+
 def entry_to_mapping(entry: Entry) -> dict[str, Any]:
     """The v1 mapping dict for an entry, as it is stored in a preset file."""
     if not entry.trigger.inputs:
         raise RenderError(f'Entry "{entry.name or entry.id}" has no trigger')
+
+    gap = _first_gap(entry.then)
+    if gap is not None:
+        raise RenderError(f'Entry "{entry.name or entry.id}": {gap}')
 
     mapping: dict[str, Any] = {
         "input_combination": [i.to_json() for i in entry.trigger.inputs],
