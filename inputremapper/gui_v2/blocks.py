@@ -41,6 +41,7 @@ gi.require_version("Gdk", "3.0")
 from evdev import ecodes
 from gi.repository import Gdk, Gtk
 
+from inputremapper.configs.keyboard_layout import keyboard_layout
 from inputremapper.gui_v2.block_ops import (
     ChainPath,
     call_gap,
@@ -123,7 +124,7 @@ TITLES = {
     "set": "set",
     "add": "add to",
     "event": "raw event",
-    "symbol": "output key",
+    "symbol": "type",
     "raw": "other code",
 }
 
@@ -145,6 +146,14 @@ ARG_LABELS = {
     ("ifeq", "variable"): "if",
     ("ifeq", "value"): "=",
 }
+
+
+def _typed_names() -> list[str]:
+    """What an output key block offers: the characters and key names as typed
+    ("a", "0", "Escape"), in the current keyboard layout."""
+    return sorted(
+        name for name in keyboard_layout.list_names() if not name.startswith("KEY_")
+    )
 
 
 def _all_key_names() -> list[str]:
@@ -173,7 +182,7 @@ _KEY_BLOCK_TITLES = {
 
 # The palette says what a block can act on, since it isn't chosen yet.
 PALETTE_TITLES = {
-    "symbol": "output key (held while pressed)",
+    "symbol": "type character / key (held while pressed)",
     "key": "press key / click / button",
     "key_down": "key / mouse / button down",
     "key_up": "key / mouse / button up",
@@ -181,7 +190,7 @@ PALETTE_TITLES = {
 
 # Extra words that find a block when searching the palette.
 PALETTE_KEYWORDS = {
-    "symbol": "simple single key remap replace hold",
+    "symbol": "text typing output ascii letter digit remap replace hold",
     "key": "tap type click mouse button",
     "key_down": "hold press mouse button",
     "key_up": "release mouse button",
@@ -362,6 +371,9 @@ class BlockEditor(Gtk.ScrolledWindow):
         self._key_names = Gtk.ListStore(str)
         for name in _all_key_names():
             self._key_names.append([name])
+        self._typed_names = Gtk.ListStore(str)
+        for name in _typed_names():
+            self._typed_names.append([name])
         self._variable_names = Gtk.ListStore(str)
 
         self.get_style_context().add_class("v2-blocks")
@@ -686,12 +698,15 @@ class BlockEditor(Gtk.ScrolledWindow):
         widget: Gtk.Widget
         if arg.kind is ArgKind.SYMBOL:
             # A drop-down of every key, which also narrows as you type.
-            combo = Gtk.ComboBox.new_with_model_and_entry(self._key_names)
+            names = (
+                self._typed_names if arg is _PSEUDO_ARG["symbol"] else self._key_names
+            )
+            combo = Gtk.ComboBox.new_with_model_and_entry(names)
             combo.set_entry_text_column(0)
             entry = combo.get_child()
             assert isinstance(entry, Gtk.Entry)
             entry.set_width_chars(18)
-            entry.set_completion(self._completion(self._key_names))
+            entry.set_completion(self._completion(names))
             widget = combo
         else:
             entry = Gtk.Entry(width_chars=6)
