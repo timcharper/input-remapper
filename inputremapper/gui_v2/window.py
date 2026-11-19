@@ -233,6 +233,7 @@ class Window(Gtk.Window):
         combo.pack_start(add, False, False, 0)
         combo.pack_start(self.add_menu_button, False, False, 0)
         combo.set_halign(Gtk.Align.START)
+        self.add_combo = combo
         return combo
 
     def _build_entry_form(self) -> Gtk.Widget:
@@ -288,6 +289,18 @@ class Window(Gtk.Window):
         self.form_stack = Gtk.Stack()
         self.form_stack.add_named(self.form, "form")
         self.form_stack.add_named(hint, "hint")
+
+        welcome = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        welcome.set_valign(Gtk.Align.CENTER)
+        welcome_label = Gtk.Label(label="Create a profile to get started")
+        welcome_label.get_style_context().add_class("dim-label")
+        create = Gtk.Button(label="New profile")
+        create.set_halign(Gtk.Align.CENTER)
+        create.connect("clicked", lambda *_: self.controller.new_profile())
+        welcome.pack_start(welcome_label, False, False, 0)
+        welcome.pack_start(create, False, False, 0)
+        welcome.show_all()
+        self.form_stack.add_named(welcome, "welcome")
         return self.form_stack
 
     # Refreshing ----------------------------------------------------------------
@@ -350,6 +363,7 @@ class Window(Gtk.Window):
             self.play_button,
         ):
             button.set_sensitive(has_profile)
+        self.add_combo.set_sensitive(has_profile)
         playing = (
             c.selected_profile is not None and c.selected_profile == c.active_profile
         )
@@ -391,7 +405,11 @@ class Window(Gtk.Window):
     def _refresh_form(self) -> None:
         c = self.controller
         entry = c.entry
-        self.form_stack.set_visible_child_name("form" if entry else "hint")
+        if c.profile is None:
+            page = "welcome"
+        else:
+            page = "form" if entry else "hint"
+        self.form_stack.set_visible_child_name(page)
         self._refresh_devices()
         self.record_button.set_image(
             Gtk.Image.new_from_icon_name(
