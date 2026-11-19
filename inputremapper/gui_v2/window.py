@@ -276,7 +276,19 @@ class Window(Gtk.Window):
         self.entry_error = Gtk.Label(xalign=0)
         self.entry_error.get_style_context().add_class("error")
         self.form.attach(self.entry_error, 1, 3, 1, 1)
-        return self.form
+
+        # Without a selected entry there is nothing to edit: show a hint instead of
+        # a greyed-out form.
+        hint = Gtk.Label(label="Select or create a mapping in the left panel")
+        hint.get_style_context().add_class("dim-label")
+        # Stack children must be visible before the stack can switch to them, and
+        # the first refresh happens before the window is shown.
+        hint.show()
+        self.form.show()
+        self.form_stack = Gtk.Stack()
+        self.form_stack.add_named(self.form, "form")
+        self.form_stack.add_named(hint, "hint")
+        return self.form_stack
 
     # Refreshing ----------------------------------------------------------------
 
@@ -379,7 +391,7 @@ class Window(Gtk.Window):
     def _refresh_form(self) -> None:
         c = self.controller
         entry = c.entry
-        self.form.set_sensitive(entry is not None)
+        self.form_stack.set_visible_child_name("form" if entry else "hint")
         self._refresh_devices()
         self.record_button.set_image(
             Gtk.Image.new_from_icon_name(
