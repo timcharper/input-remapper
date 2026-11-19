@@ -166,6 +166,46 @@ _KEY_BLOCK_TITLES = {
 }
 
 
+# The palette says what a block can act on, since it isn't chosen yet.
+PALETTE_TITLES = {
+    "key": "press key / click / button",
+    "key_down": "key / mouse / button down",
+    "key_up": "key / mouse / button up",
+}
+
+# Extra words that find a block when searching the palette.
+PALETTE_KEYWORDS = {
+    "key": "tap type click mouse button",
+    "key_down": "hold press mouse button",
+    "key_up": "release mouse button",
+    "hold_keys": "press together chord",
+    "wait": "delay sleep pause",
+    "mouse": "cursor pointer move",
+    "mouse_xy": "cursor pointer move",
+    "wheel": "scroll",
+    "if_eq": "variable compare condition",
+    "ifeq": "variable compare condition",
+    "set": "variable assign",
+    "add": "variable increase counter",
+    "if_tap": "short press condition",
+    "if_single": "alone condition",
+    "mod_tap": "hold tap",
+    "repeat": "loop times",
+    "while_eq": "loop condition",
+    "parallel": "together",
+}
+
+
+def palette_title(op: str) -> str:
+    return PALETTE_TITLES.get(op, TITLES.get(op, op))
+
+
+def palette_matches(op: str, query: str) -> bool:
+    """Whether every word of the query is in the block's name, op or keywords."""
+    haystack = f"{palette_title(op)} {op} {PALETTE_KEYWORDS.get(op, '')}".lower()
+    return all(word in haystack for word in query.split())
+
+
 def block_title(call: Call) -> str:
     """What a block is called; key blocks say "mouse" for mouse buttons."""
     titles = _KEY_BLOCK_TITLES.get(call.op)
@@ -397,21 +437,36 @@ class BlockEditor(Gtk.ScrolledWindow):
         self, button: Gtk.MenuButton, path: ChainPath, index: int
     ) -> Gtk.Popover:
         popover = Gtk.Popover.new(button)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         for margin in ("top", "bottom", "start", "end"):
-            getattr(box, f"set_margin_{margin}")(8)
+            getattr(outer, f"set_margin_{margin}")(8)
 
-        def choose(_button: Gtk.Button, op: str) -> None:
+        search = Gtk.SearchEntry(placeholder_text="Search blocks")
+        outer.pack_start(search, False, False, 0)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        scrolled = Gtk.ScrolledWindow(
+            hscrollbar_policy=Gtk.PolicyType.NEVER,
+            propagate_natural_height=True,
+            min_content_height=200,
+            max_content_height=420,
+        )
+        scrolled.add(box)
+        outer.pack_start(scrolled, True, True, 0)
+
+        def choose(_button: Gtk.Button | None, op: str) -> None:
             popover.popdown()
             # Appended to the stack: its end may have moved since this was built.
             self.add_block(path, len(get_chain(self._base, path)), op)
 
+        sections: list[tuple[Gtk.Label, list[tuple[Gtk.Button, str]]]] = []
         for title, color, ops in CATEGORIES:
             header = Gtk.Label(label=title, xalign=0)
             header.get_style_context().add_class("dim-label")
             box.pack_start(header, False, False, 0)
+            items: list[tuple[Gtk.Button, str]] = []
             for op in ops:
-                item = Gtk.Button(label=TITLES.get(op, op))
+                item = Gtk.Button(label=palette_title(op))
                 item.set_relief(Gtk.ReliefStyle.NONE)
                 item.set_halign(Gtk.Align.FILL)
                 item.get_child().set_xalign(0)  # type: ignore[union-attr]
@@ -419,8 +474,45 @@ class BlockEditor(Gtk.ScrolledWindow):
                 item.get_style_context().add_class(CATEGORY_CLASS[color])
                 item.connect("clicked", choose, op)
                 box.pack_start(item, False, False, 0)
-        box.show_all()
-        popover.add(box)
+                items.append((item, op))
+            sections.append((header, items))
+
+        def visible_ops() -> list[str]:
+            return [
+                op
+                for _header, items in sections
+                for item, op in items
+                if item.get_visible()
+            ]
+
+        def filter_items(entry: Gtk.SearchEntry) -> None:
+            query = entry.get_text().strip().lower()
+            for header, items in sections:
+                shown = 0
+                for item, op in items:
+                    match = palette_matches(op, query)
+                    item.set_visible(match)
+                    shown += match
+                header.set_visible(shown > 0)
+
+        def pick_first(entry: Gtk.SearchEntry) -> None:
+            # The entry reports changes after a short delay; don't act on stale ones.
+            filter_items(entry)
+            ops = visible_ops()
+            if ops:
+                choose(None, ops[0])
+
+        def opened(*_: Any) -> None:
+            search.set_text("")
+            filter_items(search)
+            search.grab_focus()
+
+        search.connect("search-changed", filter_items)
+        search.connect("activate", pick_first)
+        search.connect("stop-search", lambda *_: popover.popdown())
+        popover.connect("show", opened)
+        outer.show_all()
+        popover.add(outer)
         return popover
 
     def make_block(
