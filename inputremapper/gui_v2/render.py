@@ -31,6 +31,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from inputremapper.configs.mapping import Mapping
 from inputremapper.configs.paths import PathUtils
 from inputremapper.gui_v2.block_ops import first_gap
 from inputremapper.gui_v2.document import Entry, InputRef, Profile, Trigger
@@ -82,7 +83,23 @@ def entry_to_mapping(entry: Entry) -> dict[str, Any]:
     if entry.then:
         mapping["output_symbol"] = print_chain(entry.then)
     mapping.update(entry.v1_extra)
+    _check_mapping(mapping, entry.id)
     return mapping
+
+
+def _check_mapping(mapping: dict[str, Any], entry_id: str) -> None:
+    """Run the mapping through the same validation the service applies, so that
+    problems are shown on Apply and not only in the service's log."""
+    try:
+        Mapping(**mapping).assert_strict()
+    except Exception as error:
+        errors = getattr(error, "errors", None)
+        if callable(errors):
+            reasons = [str(e.get("msg", "")) for e in errors()]
+        else:
+            reasons = [str(error)]
+        reason = "; ".join(r.strip() for r in reasons if r.strip())
+        raise RenderError(reason or "it is not valid", entry_id) from error
 
 
 def render_profile(profile: Profile) -> dict[str, list[dict[str, Any]]]:

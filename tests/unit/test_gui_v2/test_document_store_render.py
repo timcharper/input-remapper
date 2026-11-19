@@ -132,6 +132,25 @@ class TestRender(unittest.TestCase):
             self.assertEqual(len(json.loads(path.read_text())), 1)
             self.assertFalse((Path(tmp) / "gone").exists())
 
+    def test_apply_reports_what_the_service_would_reject(self):
+        def entry(code: str, target: str = "keyboard") -> Entry:
+            return Entry(
+                trigger=Trigger(inputs=(InputRef(EV_KEY, KEY_F4),), device="kbd"),
+                then=parse_text(code),
+                target=target,
+            )
+
+        with self.assertRaises(RenderError) as bad_time:
+            render_profile(Profile("p", (entry("wait(40fdsaf)"),)))
+        self.assertIn("time", str(bad_time.exception))
+        self.assertIsNotNone(bad_time.exception.entry_id)
+
+        with self.assertRaises(RenderError) as bad_target:
+            render_profile(Profile("p", (entry("key(B)", "mouse"),)))
+        self.assertIn("not available", str(bad_target.exception))
+
+        render_profile(Profile("p", (entry("key(a)"),)))
+
     def test_missing_trigger_or_device(self):
         with self.assertRaises(RenderError):
             render_profile(Profile("p", (Entry(trigger=Trigger(device="kbd")),)))
