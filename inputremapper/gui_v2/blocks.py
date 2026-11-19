@@ -64,7 +64,11 @@ DRAG_TARGET = "application/x-input-remapper-block"
 
 # (title, color, blocks) per palette section.
 CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("Keys", "#4c97ff", ("key", "key_down", "key_up", "hold_keys", "modify", "hold")),
+    (
+        "Keys",
+        "#4c97ff",
+        ("symbol", "key", "key_down", "key_up", "hold_keys", "modify", "hold"),
+    ),
     ("Timing", "#3fb8c9", ("wait", "repeat")),
     ("Mouse", "#59c059", ("mouse", "mouse_xy", "wheel")),
     (
@@ -169,6 +173,7 @@ _KEY_BLOCK_TITLES = {
 
 # The palette says what a block can act on, since it isn't chosen yet.
 PALETTE_TITLES = {
+    "symbol": "output key (held while pressed)",
     "key": "press key / click / button",
     "key_down": "key / mouse / button down",
     "key_up": "key / mouse / button up",
@@ -176,6 +181,7 @@ PALETTE_TITLES = {
 
 # Extra words that find a block when searching the palette.
 PALETTE_KEYWORDS = {
+    "symbol": "simple single key remap replace hold",
     "key": "tap type click mouse button",
     "key_down": "hold press mouse button",
     "key_up": "release mouse button",

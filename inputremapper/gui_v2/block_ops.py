@@ -54,6 +54,8 @@ def default_value(spec: ArgSpec) -> Value:
 
 def default_call(op: str) -> Call:
     """A new block of this kind with every required argument filled in."""
+    if op == "symbol":
+        return Call("symbol", (_DEFAULT_SYMBOL,))
     spec = SCHEMA[op]
     if spec.spread:
         return Call(op, (default_value(spec.args[0]),))
@@ -208,6 +210,8 @@ def block_spec(call: Call) -> BlockSpec | None:
 
 def call_gap(call: Call) -> str | None:
     """What a block itself is missing, or None. Nested blocks are not looked at."""
+    if call.op == "symbol" and not (call.args and call.args[0]):
+        return 'an "output key" block has no key chosen'
     spec = SCHEMA.get(call.op)
     if spec is None:
         return None
@@ -222,8 +226,11 @@ def call_gap(call: Call) -> str | None:
     return None
 
 
-def first_gap(chain: Chain) -> str | None:
+def first_gap(chain: Chain, _top: bool = True) -> str | None:
     """The first thing missing anywhere in the macro, or None if it is complete."""
+    # An output key is a mapping's whole output, not a step of a macro.
+    if any(call.op == "symbol" for call in chain) and (len(chain) > 1 or not _top):
+        return 'an "output key" block can\'t be combined with other blocks'
     for call in chain:
         gap = call_gap(call)
         if gap is not None:
@@ -233,7 +240,7 @@ def first_gap(chain: Chain) -> str | None:
             continue
         for value in call.args:
             if is_chain(value):
-                inner = first_gap(cast("Chain", value))
+                inner = first_gap(cast("Chain", value), False)
                 if inner is not None:
                     return inner
     return None

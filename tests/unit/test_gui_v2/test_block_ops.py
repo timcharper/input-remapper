@@ -22,6 +22,7 @@ from inputremapper.gui_v2.block_ops import (
     ChainPath,
     can_move,
     default_call,
+    first_gap,
     get_chain,
     insert_call,
     move_call,
@@ -132,3 +133,14 @@ class TestBlockOps(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOutputKey(unittest.TestCase):
+    def test_output_key_must_stand_alone(self):
+        key = default_call("symbol")
+        self.assertIn("no key", first_gap((key,)))
+        key = Call("symbol", ("KEY_A",))
+        self.assertIsNone(first_gap((key,)))
+        self.assertIn("combined", first_gap((key, Call("wait", (10,)))))
+        nested = set_arg((default_call("repeat"),), (), 0, 1, (key,))
+        self.assertIn("combined", first_gap(nested))
