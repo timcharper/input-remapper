@@ -1,0 +1,417 @@
+# input-remapper - GUI for device specific keyboard mappings
+# Copyright (C) 2026 sezanzeb <4t1pzast9@mozmail.com>
+#
+# This file is part of input-remapper.
+#
+# input-remapper is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# input-remapper is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with input-remapper.  If not, see <https://www.gnu.org/licenses/>.
+
+
+"""The GTK window of the beta GUI. Only displays the controller's state."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from typing import Any
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+
+from inputremapper.gui_v2.controller import Controller
+from inputremapper.gui_v2.document import Entry
+from inputremapper.gui_v2.macro_text import (
+    MacroTextError,
+    parse_text,
+    print_chain,
+)
+from inputremapper.gui_v2.trigger_text import (
+    parse_trigger,
+    print_trigger,
+)
+
+ACTIVE_MARK = "▶"
+
+
+def entry_title(entry: Entry) -> str:
+    if entry.name:
+        return entry.name
+    keys = print_trigger(entry.trigger.inputs)
+    return keys or "New entry"
+
+
+class Window(Gtk.Window):
+    def __init__(self, controller: Controller) -> None:
+        super().__init__(title="Input Remapper (beta)")
+        self.controller = controller
+        self._refreshing = False
+        self.set_default_size(980, 640)
+
+        self._build_header()
+        root = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        root.pack1(self._build_profiles(), resize=False, shrink=False)
+        root.pack2(self._build_editor(), resize=True, shrink=False)
+        root.set_position(240)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.pack_start(root, True, True, 0)
+        self.status = Gtk.Label(xalign=0)
+        self.status.set_margin_start(8)
+        self.status.set_margin_bottom(4)
+        outer.pack_start(self.status, False, False, 0)
+        self.add(outer)
+
+        controller.subscribe(self.refresh)
+        self.refresh()
+
+    # Building ------------------------------------------------------------------
+
+    def _build_header(self) -> None:
+        bar = Gtk.HeaderBar(show_close_button=True, title="Input Remapper (beta)")
+        self.undo_button = Gtk.Button.new_from_icon_name(
+            "edit-undo-symbolic", Gtk.IconSize.BUTTON
+        )
+        self.redo_button = Gtk.Button.new_from_icon_name(
+            "edit-redo-symbolic", Gtk.IconSize.BUTTON
+        )
+        self.undo_button.set_tooltip_text("Undo")
+        self.redo_button.set_tooltip_text("Redo")
+        self.undo_button.connect("clicked", lambda *_: self.controller.undo())
+        self.redo_button.connect("clicked", lambda *_: self.controller.redo())
+        bar.pack_start(self.undo_button)
+        bar.pack_start(self.redo_button)
+        self.set_titlebar(bar)
+
+    def _build_profiles(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(8)
+
+        heading = Gtk.Label(label="Profiles", xalign=0)
+        heading.get_style_context().add_class("title-4")
+        box.pack_start(heading, False, False, 0)
+
+        self.profile_list = Gtk.ListBox()
+        self.profile_list.connect("row-selected", self._on_profile_selected)
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.add(self.profile_list)
+        box.pack_start(scroll, True, True, 0)
+
+        self.apply_button = Gtk.Button(label="Apply")
+        self.apply_button.connect("clicked", lambda *_: self.controller.toggle_apply())
+        box.pack_start(self.apply_button, False, False, 0)
+
+        buttons = Gtk.Box(spacing=4, homogeneous=True)
+        for label, handler in (
+            ("Copy", self.controller.copy_profile),
+            ("Delete", self.controller.delete_profile),
+            ("New", self.controller.new_profile),
+        ):
+            button = Gtk.Button(label=label)
+            button.connect("clicked", lambda _b, h=handler: h())
+            buttons.pack_start(button, True, True, 0)
+        box.pack_start(buttons, False, False, 0)
+        return box
+
+    def _build_editor(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{side}")(8)
+
+        top = Gtk.Box(spacing=6)
+        self.profile_name = Gtk.Entry()
+        self.profile_name.connect("activate", self._on_profile_renamed)
+        self.profile_name.connect("focus-out-event", self._on_profile_renamed)
+        top.pack_start(self.profile_name, True, True, 0)
+        variables = Gtk.Button(label="Variables…")
+        variables.connect("clicked", self._on_variables)
+        top.pack_start(variables, False, False, 0)
+        box.pack_start(top, False, False, 0)
+
+        self.entry_list = Gtk.ListBox()
+        self.entry_list.connect("row-selected", self._on_entry_selected)
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.set_min_content_height(160)
+        scroll.add(self.entry_list)
+        box.pack_start(scroll, True, True, 0)
+
+        box.pack_start(self._build_add_button(), False, False, 0)
+        box.pack_start(self._build_entry_form(), False, False, 0)
+        return box
+
+    def _build_add_button(self) -> Gtk.Widget:
+        combo = Gtk.Box(spacing=0)
+        combo.get_style_context().add_class("linked")
+        add = Gtk.Button(label="+ Add")
+        add.connect("clicked", lambda *_: self.controller.new_entry())
+        self.add_menu_button = Gtk.MenuButton()
+        self.add_menu_button.connect("clicked", self._populate_add_menu)
+        combo.pack_start(add, False, False, 0)
+        combo.pack_start(self.add_menu_button, False, False, 0)
+        combo.set_halign(Gtk.Align.START)
+        return combo
+
+    def _build_entry_form(self) -> Gtk.Widget:
+        self.form = Gtk.Grid(row_spacing=6, column_spacing=8)
+
+        def row(index: int, label: str, widget: Gtk.Widget) -> None:
+            self.form.attach(Gtk.Label(label=label, xalign=1), 0, index, 1, 1)
+            widget.set_hexpand(True)
+            self.form.attach(widget, 1, index, 1, 1)
+
+        self.entry_name = Gtk.Entry(placeholder_text="Name (optional)")
+        self.entry_name.connect("changed", self._on_name_changed)
+        row(0, "Name", self.entry_name)
+
+        when = Gtk.Box(spacing=6)
+        self.trigger_entry = Gtk.Entry(placeholder_text="KEY_LEFTCTRL + KEY_A")
+        self.trigger_entry.connect("changed", self._on_trigger_changed)
+        self.device_combo = Gtk.ComboBoxText()
+        self.device_combo.connect("changed", self._on_device_changed)
+        when.pack_start(self.trigger_entry, True, True, 0)
+        when.pack_start(Gtk.Label(label="is pressed on"), False, False, 0)
+        when.pack_start(self.device_combo, False, False, 0)
+        row(1, "When", when)
+
+        self.then_view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        self.then_view.set_size_request(-1, 90)
+        self.then_view.get_buffer().connect("changed", self._on_then_changed)
+        frame = Gtk.Frame()
+        frame.add(self.then_view)
+        row(2, "Then", frame)
+
+        self.entry_error = Gtk.Label(xalign=0)
+        self.entry_error.get_style_context().add_class("error")
+        self.form.attach(self.entry_error, 1, 3, 1, 1)
+
+        delete = Gtk.Button(label="Delete entry")
+        delete.connect("clicked", self._on_delete_entry)
+        delete.set_halign(Gtk.Align.END)
+        self.form.attach(delete, 1, 4, 1, 1)
+        return self.form
+
+    # Refreshing ----------------------------------------------------------------
+
+    def refresh(self) -> None:
+        self._refreshing = True
+        try:
+            self._refresh_header()
+            self._refresh_profiles()
+            self._refresh_entries()
+            self._refresh_form()
+        finally:
+            self._refreshing = False
+
+    def _refresh_header(self) -> None:
+        self.undo_button.set_sensitive(self.controller.can_undo)
+        self.redo_button.set_sensitive(self.controller.can_redo)
+        self.status.set_text(self.controller.message)
+
+    def _refresh_profiles(self) -> None:
+        c = self.controller
+        for child in self.profile_list.get_children():
+            self.profile_list.remove(child)
+        for profile in c.workspace.profiles:
+            running = profile.name == c.active_profile
+            label = Gtk.Label(
+                label=f"{ACTIVE_MARK} {profile.name}" if running else profile.name,
+                xalign=0,
+            )
+            label.set_margin_top(4)
+            label.set_margin_bottom(4)
+            row = Gtk.ListBoxRow()
+            row.profile_name = profile.name  # pyright: ignore
+            row.add(label)
+            self.profile_list.add(row)
+            if profile.name == c.selected_profile:
+                self.profile_list.select_row(row)
+        self.profile_list.show_all()
+
+        selected_running = (
+            c.selected_profile is not None and c.selected_profile == c.active_profile
+        )
+        self.apply_button.set_label("Stop" if selected_running else "Apply")
+        self.apply_button.set_sensitive(c.profile is not None)
+
+    def _refresh_entries(self) -> None:
+        c = self.controller
+        for child in self.entry_list.get_children():
+            self.entry_list.remove(child)
+        profile = c.profile
+        if profile is not None:
+            for entry in profile.entries:
+                label = Gtk.Label(label=entry_title(entry), xalign=0)
+                label.set_margin_top(4)
+                label.set_margin_bottom(4)
+                row = Gtk.ListBoxRow()
+                row.entry_id = entry.id  # pyright: ignore
+                row.add(label)
+                self.entry_list.add(row)
+                if entry.id == c.selected_entry:
+                    self.entry_list.select_row(row)
+        self.entry_list.show_all()
+
+    def _refresh_form(self) -> None:
+        c = self.controller
+        profile = c.profile
+        name = profile.name if profile else ""
+        if not self.profile_name.has_focus() or self.profile_name.get_text() == name:
+            self.profile_name.set_text(name)
+        self.profile_name.set_sensitive(profile is not None)
+
+        entry = c.entry
+        self.form.set_sensitive(entry is not None)
+        if entry is None:
+            self.entry_name.set_text("")
+            self.trigger_entry.set_text("")
+            self.then_view.get_buffer().set_text("")
+            self.entry_error.set_text("")
+            return
+
+        self._set_text(self.entry_name, entry.name or "")
+        shown = print_trigger(entry.trigger.inputs)
+        if not self.trigger_entry.has_focus():
+            self._set_text(self.trigger_entry, shown)
+        self._refresh_devices(entry)
+        buffer = self.then_view.get_buffer()
+        text = print_chain(entry.then)
+        if not self.then_view.has_focus() and self._buffer_text(buffer) != text:
+            buffer.set_text(text)
+
+    def _refresh_devices(self, entry: Entry) -> None:
+        combo = self.device_combo
+        combo.remove_all()
+        selected = -1
+        for index, group in enumerate(self.controller.groups.get_groups()):
+            combo.append(group.key, group.name)
+            if group.key == entry.trigger.device:
+                selected = index
+        if selected >= 0:
+            combo.set_active(selected)
+        else:
+            combo.set_active(-1)
+
+    @staticmethod
+    def _set_text(widget: Gtk.Entry, text: str) -> None:
+        if widget.get_text() != text:
+            widget.set_text(text)
+
+    @staticmethod
+    def _buffer_text(buffer: Gtk.TextBuffer) -> str:
+        return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
+
+    # Handlers ------------------------------------------------------------------
+
+    def _on_profile_selected(self, _list: Gtk.ListBox, row: Any) -> None:
+        if self._refreshing or row is None:
+            return
+        self.controller.select_profile(row.profile_name)
+
+    def _on_entry_selected(self, _list: Gtk.ListBox, row: Any) -> None:
+        if self._refreshing:
+            return
+        self.controller.select_entry(row.entry_id if row is not None else None)
+
+    def _on_profile_renamed(self, *_: Any) -> bool:
+        if not self._refreshing:
+            self.controller.rename_profile(self.profile_name.get_text())
+        return False
+
+    def _on_name_changed(self, widget: Gtk.Entry) -> None:
+        if self._refreshing:
+            return
+        text = widget.get_text() or None
+        self.controller.edit_entry(lambda e: replace(e, name=text), merge_key="name")
+
+    def _on_trigger_changed(self, widget: Gtk.Entry) -> None:
+        if self._refreshing:
+            return
+        try:
+            inputs = parse_trigger(widget.get_text())
+        except ValueError as error:
+            self.entry_error.set_text(str(error))
+            return
+        self.entry_error.set_text("")
+        self.controller.edit_entry(
+            lambda e: replace(e, trigger=replace(e.trigger, inputs=inputs)),
+            merge_key="trigger",
+        )
+
+    def _on_device_changed(self, widget: Gtk.ComboBoxText) -> None:
+        if self._refreshing:
+            return
+        key = widget.get_active_id()
+        if key is None:
+            return
+        self.controller.edit_entry(
+            lambda e: replace(e, trigger=replace(e.trigger, device=key))
+        )
+
+    def _on_then_changed(self, buffer: Gtk.TextBuffer) -> None:
+        if self._refreshing:
+            return
+        try:
+            chain = parse_text(self._buffer_text(buffer))
+        except MacroTextError as error:
+            self.entry_error.set_text(str(error))
+            return
+        self.entry_error.set_text("")
+        self.controller.edit_entry(lambda e: replace(e, then=chain), merge_key="then")
+
+    def _on_delete_entry(self, *_: Any) -> None:
+        if self.controller.selected_entry:
+            self.controller.delete_entry(self.controller.selected_entry)
+
+    def _populate_add_menu(self, button: Gtk.MenuButton) -> None:
+        menu = Gtk.Menu()
+        new = Gtk.MenuItem(label="New")
+        new.connect("activate", lambda *_: self.controller.new_entry())
+        menu.append(new)
+
+        importer = Gtk.MenuItem(label="Import from v1 preset…")
+        submenu = Gtk.Menu()
+        presets = self.controller.list_v1_presets()
+        for preset in presets:
+            item = Gtk.MenuItem(label=f"{preset.group_name} / {preset.name}")
+            item.connect("activate", lambda _i, p=preset: self.controller.import_v1(p))
+            submenu.append(item)
+        if not presets:
+            empty = Gtk.MenuItem(label="No presets found")
+            empty.set_sensitive(False)
+            submenu.append(empty)
+        importer.set_submenu(submenu)
+        menu.append(importer)
+        menu.show_all()
+        button.set_popup(menu)
+
+    def _on_variables(self, *_: Any) -> None:
+        profile = self.controller.profile
+        if profile is None:
+            return
+        dialog = Gtk.Dialog(title="Variables", transient_for=self, modal=True)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
+        dialog.get_content_area().add(
+            Gtk.Label(label="One variable name per line", xalign=0)
+        )
+        view = Gtk.TextView()
+        view.set_size_request(280, 160)
+        view.get_buffer().set_text("\n".join(profile.variables))
+        dialog.get_content_area().add(view)
+        dialog.show_all()
+        if dialog.run() == Gtk.ResponseType.OK:
+            self.controller.set_variables(
+                self._buffer_text(view.get_buffer()).split("\n")
+            )
+        dialog.destroy()

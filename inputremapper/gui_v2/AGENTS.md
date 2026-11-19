@@ -42,3 +42,13 @@ checks Pylance reports in an editor). To check it, put a `pyrightconfig.json` wi
 `{"include": ["inputremapper/gui_v2"], "typeCheckingMode": "strict"}` at the repo root,
 run `pyright --pythonpath /usr/bin/python3`, and delete the file again. Note that
 `include` paths must be relative.
+
+## Running the beta GUI
+
+`python3 -m inputremapper.bin.input_remapper_beta` (the service must be running, or
+it offers to start it). `controller.py` holds all behaviour and has no GTK imports;
+`window.py` only displays its state and forwards actions, so add logic there and test
+it in `tests/unit/test_gui_v2/test_controller.py`.
+
+Known stand-ins: the trigger is typed as key names (`trigger_text.py`) until recording
+from a device exists, and "Then" is the macro text until the block editor is built.
