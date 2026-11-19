@@ -201,6 +201,33 @@ class TestController(unittest.TestCase):
         assert profile is not None
         self.assertEqual(len(profile.entries), 0)
 
+    def test_import_declares_the_variables_macros_use(self) -> None:
+        directory = self.presets / "Keyboard"
+        directory.mkdir(parents=True)
+        mappings = [
+            {
+                "input_combination": [{"type": 1, "code": 30}],
+                "target_uinput": "keyboard",
+                "output_symbol": "set(mode, 1).if_eq($mode, 1, key(a), key(b))",
+            },
+            {
+                "input_combination": [{"type": 1, "code": 31}],
+                "target_uinput": "keyboard",
+                "output_symbol": "set(count, 2).bogus($other)",
+            },
+        ]
+        (directory / "vars.json").write_text(json.dumps(mappings))
+        self.controller.new_profile()
+        self.controller.set_variables(["existing"])
+        self.controller.import_v1(self.controller.list_v1_presets()[0])
+        profile = self.controller.profile
+        assert profile is not None
+        self.assertEqual(profile.variables, ("existing", "mode", "count", "other"))
+        self.controller.undo()
+        profile = self.controller.profile
+        assert profile is not None
+        self.assertEqual(profile.variables, ("existing",))
+
     def test_variables_are_cleaned(self) -> None:
         self.controller.new_profile()
         self.controller.set_variables([" a ", "", "a", "b"])

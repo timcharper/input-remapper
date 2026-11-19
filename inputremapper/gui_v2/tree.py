@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -69,6 +70,33 @@ class Call:
                     break
                 trimmed.pop()
         return Call(op, tuple(trimmed))
+
+
+_VARIABLE_IN_TEXT = re.compile(r"\$([A-Za-z_]\w*)")
+
+
+def variables_used(chain: Chain) -> list[str]:
+    """Names of the variables a macro reads or writes, in order of appearance."""
+    found: list[str] = []
+
+    def add(name: str) -> None:
+        if name not in found:
+            found.append(name)
+
+    for call in chain:
+        if call.op == "raw":
+            for arg in call.args:
+                if isinstance(arg, str):
+                    for name in _VARIABLE_IN_TEXT.findall(arg):
+                        add(name)
+            continue
+        for arg in call.args:
+            if isinstance(arg, Var):
+                add(arg.name)
+            elif is_chain(arg):
+                for name in variables_used(cast("Chain", arg)):
+                    add(name)
+    return found
 
 
 def is_chain(value: object) -> bool:

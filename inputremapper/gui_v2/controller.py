@@ -41,6 +41,7 @@ from inputremapper.gui_v2.render import (
     write_rendered,
 )
 from inputremapper.gui_v2.store import load_workspace, save_workspace
+from inputremapper.gui_v2.tree import variables_used
 from inputremapper.gui_v2.undo import History
 
 
@@ -384,9 +385,21 @@ class Controller:
             self.message = f'Could not import "{preset.name}": {error}'
             self._changed()
             return
-        self.edit_profile(
-            lambda p: replace(p, entries=p.entries + tuple(entries)),
-        )
+
+        def add_entries(profile: Profile) -> Profile:
+            # Variables the imported macros use are declared for the profile.
+            variables = list(profile.variables)
+            for entry in entries:
+                for name in variables_used(entry.then):
+                    if name not in variables:
+                        variables.append(name)
+            return replace(
+                profile,
+                entries=profile.entries + tuple(entries),
+                variables=tuple(variables),
+            )
+
+        self.edit_profile(add_entries)
         if entries:
             self.selected_entry = entries[0].id
             self._changed()
