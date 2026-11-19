@@ -49,6 +49,7 @@ from inputremapper.gui_v2.trigger_text import (
 )
 
 ACTIVE_MARK = "▶"
+NEW_PROFILE = "<new profile>"
 
 
 def entry_title(entry: Entry) -> str:
@@ -102,19 +103,20 @@ class Window(Gtk.Window):
         self.controller = controller
         self._refreshing = False
         self._refresh_scheduled = False
-        self._profile_rows: dict[str, KeyedRow] = {}
+        self._profile_keys: tuple[str, ...] = ()
         self._entry_rows: dict[str, KeyedRow] = {}
         self._device_keys: tuple[str, ...] = ()
         self.set_default_size(980, 640)
 
         self._build_header()
-        root = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        root.pack1(self._build_profiles(), resize=False, shrink=False)
-        root.pack2(self._build_editor(), resize=True, shrink=False)
-        root.set_position(240)
-
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        outer.pack_start(root, True, True, 0)
+        outer.pack_start(self._build_profile_bar(), False, False, 0)
+        outer.pack_start(Gtk.Separator(), False, False, 0)
+        body = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        body.pack1(self._build_entries(), resize=False, shrink=False)
+        body.pack2(self._build_entry_form(), resize=True, shrink=False)
+        body.set_position(260)
+        outer.pack_start(body, True, True, 0)
         self.status = Gtk.Label(xalign=0)
         self.status.set_margin_start(8)
         self.status.set_margin_bottom(4)
@@ -142,62 +144,61 @@ class Window(Gtk.Window):
         bar.pack_start(self.redo_button)
         self.set_titlebar(bar)
 
-    def _build_profiles(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.set_margin_top(8)
-        box.set_margin_bottom(8)
-        box.set_margin_start(8)
-
-        heading = Gtk.Label(label="Profiles", xalign=0)
-        heading.get_style_context().add_class("title-4")
-        box.pack_start(heading, False, False, 0)
-
-        self.profile_list = Gtk.ListBox()
-        self.profile_list.connect("row-selected", self._on_profile_selected)
-        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scroll.add(self.profile_list)
-        box.pack_start(scroll, True, True, 0)
-
-        self.apply_button = Gtk.Button(label="Apply")
-        self.apply_button.connect("clicked", lambda *_: self.controller.toggle_apply())
-        box.pack_start(self.apply_button, False, False, 0)
-
-        buttons = Gtk.Box(spacing=4, homogeneous=True)
-        for label, handler in (
-            ("Copy", self.controller.copy_profile),
-            ("Delete", self.controller.delete_profile),
-            ("New", self.controller.new_profile),
-        ):
-            button = Gtk.Button(label=label)
-            button.connect("clicked", lambda _b, h=handler: h())
-            buttons.pack_start(button, True, True, 0)
-        box.pack_start(buttons, False, False, 0)
-        return box
-
-    def _build_editor(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    def _build_profile_bar(self) -> Gtk.Widget:
+        bar = Gtk.Box(spacing=6)
         for side in ("top", "bottom", "start", "end"):
+            getattr(bar, f"set_margin_{side}")(8)
+
+        self.profile_store = Gtk.ListStore(str, str)
+        self.profile_combo = Gtk.ComboBox(model=self.profile_store)
+        renderer = Gtk.CellRendererText()
+        self.profile_combo.pack_start(renderer, True)
+        self.profile_combo.add_attribute(renderer, "text", 1)
+        self.profile_combo.set_size_request(240, -1)
+        self.profile_combo.connect("changed", self._on_profile_chosen)
+        bar.pack_start(self.profile_combo, False, False, 0)
+
+        def icon_button(icon: str, tip: str, handler: Callable[[], None]) -> Gtk.Button:
+            button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
+            button.set_tooltip_text(tip)
+            button.connect("clicked", lambda *_: handler())
+            return button
+
+        self.rename_button = icon_button(
+            "document-edit-symbolic", "Rename profile", self._on_rename
+        )
+        self.variables_button = icon_button(
+            "x-office-spreadsheet-symbolic", "Variables…", self._on_variables
+        )
+        self.clone_button = icon_button(
+            "edit-copy-symbolic", "Clone profile", self.controller.copy_profile
+        )
+        self.delete_button = icon_button(
+            "user-trash-symbolic", "Delete profile", self.controller.delete_profile
+        )
+        for button in (
+            self.rename_button,
+            self.variables_button,
+            self.clone_button,
+            self.delete_button,
+        ):
+            bar.pack_start(button, False, False, 0)
+
+        self.play_button = Gtk.Button()
+        self.play_button.connect("clicked", lambda *_: self.controller.toggle_apply())
+        bar.pack_end(self.play_button, False, False, 0)
+        return bar
+
+    def _build_entries(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for side in ("top", "bottom", "start"):
             getattr(box, f"set_margin_{side}")(8)
-
-        top = Gtk.Box(spacing=6)
-        self.profile_name = Gtk.Entry()
-        self.profile_name.connect("activate", self._on_profile_renamed)
-        self.profile_name.connect("focus-out-event", self._on_profile_renamed)
-        top.pack_start(self.profile_name, True, True, 0)
-        variables = Gtk.Button(label="Variables…")
-        variables.connect("clicked", self._on_variables)
-        top.pack_start(variables, False, False, 0)
-        box.pack_start(top, False, False, 0)
-
         self.entry_list = Gtk.ListBox()
         self.entry_list.connect("row-selected", self._on_entry_selected)
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        scroll.set_min_content_height(160)
         scroll.add(self.entry_list)
         box.pack_start(scroll, True, True, 0)
-
         box.pack_start(self._build_add_button(), False, False, 0)
-        box.pack_start(self._build_entry_form(), False, False, 0)
         return box
 
     def _build_add_button(self) -> Gtk.Widget:
@@ -214,6 +215,8 @@ class Window(Gtk.Window):
 
     def _build_entry_form(self) -> Gtk.Widget:
         self.form = Gtk.Grid(row_spacing=6, column_spacing=8)
+        for side in ("top", "bottom", "end", "start"):
+            getattr(self.form, f"set_margin_{side}")(8)
 
         def row(index: int, label: str, widget: Gtk.Widget) -> None:
             self.form.attach(Gtk.Label(label=label, xalign=1), 0, index, 1, 1)
@@ -235,10 +238,11 @@ class Window(Gtk.Window):
         row(1, "When", when)
 
         self.then_view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
-        self.then_view.set_size_request(-1, 90)
+        self.then_view.set_monospace(True)
         self.then_view.get_buffer().connect("changed", self._on_then_changed)
-        frame = Gtk.Frame()
+        frame = Gtk.ScrolledWindow(shadow_type=Gtk.ShadowType.IN)
         frame.add(self.then_view)
+        frame.set_vexpand(True)
         row(2, "Then", frame)
 
         self.entry_error = Gtk.Label(xalign=0)
@@ -277,24 +281,48 @@ class Window(Gtk.Window):
     def _refresh_profiles(self) -> None:
         c = self.controller
         names = [p.name for p in c.workspace.profiles]
-        sync_rows(
-            self.profile_list,
-            self._profile_rows,
-            names,
-            lambda name: KeyedRow(name, Gtk.Label(xalign=0)),
-        )
-        for name, row in self._profile_rows.items():
+        keys = (*names, NEW_PROFILE)
+        store = self.profile_store
+        if tuple(keys) != self._profile_keys:
+            self._profile_keys = tuple(keys)
+            store.clear()
+            for name in names:
+                store.append([name, name])
+            store.append([NEW_PROFILE, "+ New profile"])
+        for row, name in zip(store, names, strict=False):
             mark = f"{ACTIVE_MARK} " if name == c.active_profile else ""
-            self._set_label(row.label, f"{mark}{name}")
-        self._select(
-            self.profile_list, self._profile_rows.get(c.selected_profile or "")
-        )
+            if row[1] != f"{mark}{name}":
+                row[1] = f"{mark}{name}"
 
-        selected_running = (
+        wanted = c.selected_profile
+        current = self.profile_combo.get_active()
+        index = names.index(wanted) if wanted in names else -1
+        if current != index:
+            self.profile_combo.set_active(index)
+
+        has_profile = c.profile is not None
+        for button in (
+            self.rename_button,
+            self.variables_button,
+            self.clone_button,
+            self.delete_button,
+            self.play_button,
+        ):
+            button.set_sensitive(has_profile)
+        playing = (
             c.selected_profile is not None and c.selected_profile == c.active_profile
         )
-        self.apply_button.set_label("Stop" if selected_running else "Apply")
-        self.apply_button.set_sensitive(c.profile is not None)
+        self.play_button.set_image(
+            Gtk.Image.new_from_icon_name(
+                (
+                    "media-playback-stop-symbolic"
+                    if playing
+                    else "media-playback-start-symbolic"
+                ),
+                Gtk.IconSize.BUTTON,
+            )
+        )
+        self.play_button.set_tooltip_text("Stop" if playing else "Apply")
 
     def _make_entry_row(self, entry_id: str) -> KeyedRow:
         delete = Gtk.Button.new_from_icon_name(
@@ -321,10 +349,6 @@ class Window(Gtk.Window):
 
     def _refresh_form(self) -> None:
         c = self.controller
-        profile = c.profile
-        self._set_text(self.profile_name, profile.name if profile else "")
-        self.profile_name.set_sensitive(profile is not None)
-
         entry = c.entry
         self.form.set_sensitive(entry is not None)
         self._refresh_devices()
@@ -384,20 +408,36 @@ class Window(Gtk.Window):
 
     # Handlers ------------------------------------------------------------------
 
-    def _on_profile_selected(self, _list: Gtk.ListBox, row: Any) -> None:
-        if self._refreshing or row is None:
+    def _on_profile_chosen(self, combo: Gtk.ComboBox) -> None:
+        if self._refreshing:
             return
-        self.controller.select_profile(row.key)
+        tree_iter = combo.get_active_iter()
+        if tree_iter is None:
+            return
+        key = self.profile_store[tree_iter][0]
+        if key == NEW_PROFILE:
+            self.controller.new_profile()
+        else:
+            self.controller.select_profile(key)
+
+    def _on_rename(self) -> None:
+        profile = self.controller.profile
+        if profile is None:
+            return
+        dialog = Gtk.Dialog(title="Rename profile", transient_for=self, modal=True)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
+        field = Gtk.Entry(text=profile.name, activates_default=True)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        dialog.get_content_area().add(field)
+        dialog.show_all()
+        if dialog.run() == Gtk.ResponseType.OK:
+            self.controller.rename_profile(field.get_text())
+        dialog.destroy()
 
     def _on_entry_selected(self, _list: Gtk.ListBox, row: Any) -> None:
         if self._refreshing:
             return
         self.controller.select_entry(row.key if row is not None else None)
-
-    def _on_profile_renamed(self, *_: Any) -> bool:
-        if not self._refreshing:
-            self.controller.rename_profile(self.profile_name.get_text())
-        return False
 
     def _on_name_changed(self, widget: Gtk.Entry) -> None:
         if self._refreshing:
@@ -462,7 +502,7 @@ class Window(Gtk.Window):
         menu.show_all()
         button.set_popup(menu)
 
-    def _on_variables(self, *_: Any) -> None:
+    def _on_variables(self) -> None:
         profile = self.controller.profile
         if profile is None:
             return
