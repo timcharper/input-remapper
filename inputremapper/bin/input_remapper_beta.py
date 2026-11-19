@@ -21,8 +21,12 @@
 
 from __future__ import annotations
 
+import glob
+import os
+import subprocess
 import sys
 from argparse import ArgumentParser
+from pathlib import Path
 
 import gi
 
@@ -33,7 +37,7 @@ from inputremapper.bin.process_utils import ProcessUtils
 from inputremapper.configs.paths import PathUtils
 from inputremapper.daemon import Daemon
 from inputremapper.groups import _Groups
-from inputremapper.gui.reader_service import ReaderService, ReaderServiceError
+from inputremapper.gui.reader_service import ReaderService
 from inputremapper.gui_v2.controller import Controller
 from inputremapper.gui_v2.recorder import Recorder, RecorderError
 from inputremapper.gui_v2.store import default_profiles_dir
@@ -43,13 +47,38 @@ from inputremapper.logging.logger import logger
 
 
 def ensure_reader_service() -> None:
-    """Start the root helper that reads keys, if it isn't running yet."""
+    """Start the root helper that reads keys, if it isn't running yet.
+
+    It is started from this source tree and not via `input-remapper-control`: that
+    would run whichever version is installed on the system, which may use different
+    pipe paths than this code, and then the two never find each other.
+    """
     if ProcessUtils.count_python_processes("input-remapper-reader-service") >= 1:
         return
+
+    root = Path(__file__).resolve().parents[2]
+    command = [
+        "env",
+        f"PYTHONPATH={root}",
+        sys.executable,
+        str(root / "bin" / "input-remapper-reader-service"),
+    ]
+    # Same rule as the old GUI: only ask for a password if devices aren't readable.
+    devices = glob.glob("/dev/input/event*")
+    if not (devices and all(os.access(path, os.R_OK) for path in devices)):
+        command.insert(0, "pkexec")
+
+    logger.debug("Running `%s`", " ".join(command))
     try:
-        ReaderService.pkexec_reader_service()
-    except ReaderServiceError as error:
-        raise RecorderError(str(error)) from error
+        subprocess.Popen(
+            command,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as error:
+        raise RecorderError(f"Could not start the reader service: {error}") from error
 
 
 def main() -> None:
