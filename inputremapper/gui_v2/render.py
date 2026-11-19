@@ -48,7 +48,12 @@ _HANDLED_FIELDS = {"input_combination", "name", "output_symbol", "target_uinput"
 
 
 class RenderError(ValueError):
-    pass
+    """Rendering failed. With an `entry_id`, the problem is in that entry, and the
+    message is written to follow "In this mapping, "."""
+
+    def __init__(self, message: str, entry_id: str | None = None) -> None:
+        super().__init__(message)
+        self.entry_id = entry_id
 
 
 def rendered_name(profile_name: str) -> str:
@@ -87,11 +92,11 @@ def _first_gap(chain: Chain) -> str | None:
 def entry_to_mapping(entry: Entry) -> dict[str, Any]:
     """The v1 mapping dict for an entry, as it is stored in a preset file."""
     if not entry.trigger.inputs:
-        raise RenderError(f'Entry "{entry.name or entry.id}" has no trigger')
+        raise RenderError("no keys are set to trigger it", entry.id)
 
     gap = _first_gap(entry.then)
     if gap is not None:
-        raise RenderError(f'Entry "{entry.name or entry.id}": {gap}')
+        raise RenderError(gap, entry.id)
 
     mapping: dict[str, Any] = {
         "input_combination": [i.to_json() for i in entry.trigger.inputs],
@@ -110,7 +115,7 @@ def render_profile(profile: Profile) -> dict[str, list[dict[str, Any]]]:
     by_device: dict[str, list[dict[str, Any]]] = {}
     for entry in profile.entries:
         if entry.trigger.device is None:
-            raise RenderError(f'Entry "{entry.name or entry.id}" has no device')
+            raise RenderError("no device is chosen", entry.id)
         by_device.setdefault(entry.trigger.device, []).append(entry_to_mapping(entry))
     return by_device
 

@@ -158,8 +158,22 @@ class TestController(unittest.TestCase):
         self.controller.new_entry()
         self.controller.apply()
         self.assertEqual(self.daemon.calls, [])
-        self.assertIn("has no", self.controller.message)
+        self.assertIsNotNone(self.controller.error)
+        assert self.controller.error is not None
+        self.assertTrue(self.controller.error.startswith("In this mapping, "))
+        self.assertIsNotNone(self.controller.entry)
         self.assertIsNone(self.controller.active_profile)
+
+    def test_apply_selects_the_entry_with_the_problem(self) -> None:
+        self._profile_with_entry()
+        self.controller.new_entry()  # an empty second entry
+        good = self.controller.workspace.profiles[0].entries[0].id
+        bad = self.controller.selected_entry
+        self.controller.select_entry(good)
+        self.controller.apply()
+        self.assertEqual(self.controller.selected_entry, bad)
+        self.controller.dismiss_error()
+        self.assertIsNone(self.controller.error)
 
     def test_failed_start_is_reported(self) -> None:
         self._profile_with_entry()

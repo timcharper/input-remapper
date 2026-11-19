@@ -119,6 +119,8 @@ class Controller:
         self.selected_entry: str | None = None
         self.active_profile: str | None = None
         self.message: str = ""
+        # A problem the user must acknowledge, shown as a dialog by the window.
+        self.error: str | None = None
 
         self._listeners: list[Callable[[], None]] = []
 
@@ -424,7 +426,13 @@ class Controller:
         try:
             started = write_rendered(profile, self._group_name_of, self.presets_dir)
         except RenderError as error:
-            self.message = str(error)
+            if error.entry_id is not None:
+                # Show the offending mapping, and say what is wrong with it.
+                self.selected_entry = error.entry_id
+                self.error = f"In this mapping, {error}."
+                self.message = ""
+            else:
+                self.message = str(error)
             self._changed()
             return
 
@@ -443,6 +451,9 @@ class Controller:
             self.message = ""
         self.active_profile = profile.name if started else None
         self._changed()
+
+    def dismiss_error(self) -> None:
+        self.error = None
 
     def stop(self) -> None:
         if self.daemon is not None:

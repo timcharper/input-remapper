@@ -109,6 +109,7 @@ class Window(Gtk.Window):
         self._entry_rows: dict[str, KeyedRow] = {}
         self._device_keys: tuple[str, ...] = ()
         self._record_dialog: Gtk.Dialog | None = None
+        self._error_dialog: Gtk.Dialog | None = None
         self._record_label: Gtk.Label | None = None
         self.set_default_size(980, 640)
         self._install_css()
@@ -347,6 +348,7 @@ class Window(Gtk.Window):
             self._refresh_entries()
             self._refresh_form()
             self._refresh_record_dialog()
+            self._refresh_error_dialog()
         finally:
             self._refreshing = False
 
@@ -462,6 +464,31 @@ class Window(Gtk.Window):
         self.block_editor.set_chain(entry.then)
         if self.device_combo.get_active_id() != entry.trigger.device:
             self.device_combo.set_active_id(entry.trigger.device)
+
+    def _refresh_error_dialog(self) -> None:
+        """A modal for problems the user has to acknowledge, like a mapping that can't
+        be applied. It doesn't run its own loop; the controller drops the error when
+        it is answered."""
+        error = self.controller.error
+        if error is None or self._error_dialog is not None:
+            return
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text="Error",
+            secondary_text=error,
+        )
+
+        def answered(widget: Gtk.Dialog, _response: int) -> None:
+            self._error_dialog = None
+            widget.destroy()
+            self.controller.dismiss_error()
+
+        dialog.connect("response", answered)
+        self._error_dialog = dialog
+        dialog.show()
 
     def _refresh_record_dialog(self) -> None:
         """Show a modal while recording. It is also the click surface for mouse
