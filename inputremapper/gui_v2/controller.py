@@ -436,6 +436,11 @@ class Controller:
             self._changed()
             return
 
+        # The service forgets which user it works for when it restarts, and then
+        # refuses to start anything. Telling it again is cheap.
+        base = Path(self.presets_dir or PathUtils.get_preset_path())
+        self.daemon.set_config_dir(str(base.parent))
+
         # stop_all, not set_suspended: suspended injections would queue up.
         self.daemon.stop_all()
         failed = [
@@ -444,7 +449,13 @@ class Controller:
             if not self.daemon.start_injecting(key, preset)
         ]
         if failed:
-            self.message = "Could not start for: " + ", ".join(failed)
+            self.error = (
+                "Could not start for: "
+                + ", ".join(failed)
+                + ". The input-remapper service refused; see its log "
+                "(journalctl -u input-remapper) for why."
+            )
+            self.message = ""
         elif not started:
             self.message = "None of this profile's devices are connected"
         else:

@@ -52,6 +52,9 @@ class FakeDaemon:
         self.calls.append(("start", group_key, preset))
         return group_key not in self.fail
 
+    def set_config_dir(self, config_dir: str) -> None:
+        self.config_dir = config_dir
+
     def stop_all(self) -> None:
         self.calls.append(("stop_all",))
 
@@ -179,7 +182,7 @@ class TestController(unittest.TestCase):
         self._profile_with_entry()
         self.daemon.fail.add("kbd")
         self.controller.apply()
-        self.assertIn("kbd", self.controller.message)
+        self.assertIn("kbd", self.controller.error or "")
 
     def test_deleting_the_active_profile_stops_it(self) -> None:
         self._profile_with_entry()
