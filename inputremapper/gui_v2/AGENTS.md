@@ -55,7 +55,7 @@ it in `tests/unit/test_gui_v2/test_controller.py`.
 Keys are recorded from the entry's device via the reader service (Record button, needs
 a device chosen first; it starts the service with pkexec on first use). The typed key
 names (`trigger_text.py`) stay as a fallback. Only keys and buttons are recorded, no
-axes. Known stand-in: "Then" is the macro text until the block editor is built.
+axes.
 
 ## Window conventions
 
@@ -66,3 +66,18 @@ axes. Known stand-in: "Then" is the macro text until the block editor is built.
 - Handlers check `self._refreshing` first, so programmatic updates don't become edits.
 - Layout: profile bar on top (combo with "+ New profile", ▶ on the running one, rename,
   variables, clone, delete, play/stop), entries list on the left, entry form on the right.
+
+## The block editor
+
+`blocks.py` (GTK) shows the `then` tree as Scratch-style blocks: colored by category,
+macro arguments as nested C-shaped stacks, blocks reordered by dragging the handle
+into any gap, new ones from each stack's "+ block" palette. All edits are computed by
+`block_ops.py` (no GTK, tested): stacks are addressed by a chain path of
+`(call index, argument index)` steps. The editor keeps no state of its own; it reports
+a new tree through `on_change(chain, typing)` and is told what to show with
+`set_chain`, which only rebuilds widgets when the *shape* (blocks and nesting)
+changes. "Text" in the form switches to the macro text box.
+
+Known gaps: blocks can't be dragged out of the palette, only inserted by click; an
+output that is a bare key (`symbol`) is one block that can't be mixed with others
+until it's converted by hand; variables used in blocks are not auto-declared.

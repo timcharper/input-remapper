@@ -36,6 +36,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
+from inputremapper.gui_v2.blocks import BlockEditor, stylesheet
 from inputremapper.gui_v2.controller import Controller
 from inputremapper.gui_v2.document import Entry
 from inputremapper.gui_v2.macro_text import (
@@ -43,6 +44,7 @@ from inputremapper.gui_v2.macro_text import (
     parse_text,
     print_chain,
 )
+from inputremapper.gui_v2.tree import Chain
 from inputremapper.gui_v2.trigger_text import (
     parse_trigger,
     print_trigger,
@@ -133,7 +135,7 @@ class Window(Gtk.Window):
     def _install_css() -> None:
         provider = Gtk.CssProvider()
         provider.load_from_data(
-            b".v2-record image { color: #e01b24; }"
+            stylesheet() + b".v2-record image { color: #e01b24; }"
             b".v2-input-frame { border: 1px solid @borders; border-radius: 4px; }"
             b".v2-input { background-color: @theme_base_color; }"
             b".v2-input-frame:focus-within { border-color: @theme_selected_bg_color; }"
@@ -269,10 +271,31 @@ class Window(Gtk.Window):
         self.then_view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
         self.then_view.set_monospace(True)
         self.then_view.get_buffer().connect("changed", self._on_then_changed)
-        frame = Gtk.ScrolledWindow(shadow_type=Gtk.ShadowType.IN)
-        frame.add(self.then_view)
-        frame.set_vexpand(True)
-        row(2, "Then", frame)
+        text_frame = Gtk.ScrolledWindow(shadow_type=Gtk.ShadowType.IN)
+        text_frame.add(self.then_view)
+
+        # Blocks by default, the macro text as an escape hatch.
+        self.block_editor = BlockEditor(
+            self._on_blocks_changed, lambda: self._current_variables()
+        )
+        block_frame = Gtk.Frame(shadow_type=Gtk.ShadowType.IN)
+        block_frame.add(self.block_editor)
+        self.then_stack = Gtk.Stack()
+        self.then_stack.add_named(block_frame, "blocks")
+        self.then_stack.add_named(text_frame, "text")
+        self.then_stack.set_vexpand(True)
+        self.then_stack.set_hexpand(True)
+        self.then_stack.show_all()
+
+        then_label = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        then_label.pack_start(Gtk.Label(label="Then", xalign=1), False, False, 0)
+        self.text_toggle = Gtk.ToggleButton(label="Text")
+        self.text_toggle.set_tooltip_text("Edit the macro as text")
+        self.text_toggle.connect("toggled", self._on_text_toggled)
+        then_label.pack_start(self.text_toggle, False, False, 0)
+        then_label.set_valign(Gtk.Align.START)
+        self.form.attach(then_label, 0, 2, 1, 1)
+        self.form.attach(self.then_stack, 1, 2, 1, 1)
 
         self.entry_error = Gtk.Label(xalign=0)
         self.entry_error.get_style_context().add_class("error")
@@ -428,6 +451,7 @@ class Window(Gtk.Window):
             self._set_text(self.entry_name, "")
             self._set_text(self.trigger_entry, "")
             self._set_buffer(self.then_view, "")
+            self.block_editor.set_chain(())
             self.entry_error.set_text("")
             self.device_combo.set_active(-1)
             return
@@ -435,6 +459,7 @@ class Window(Gtk.Window):
         self._set_text(self.entry_name, entry.name or "")
         self._set_text(self.trigger_entry, print_trigger(entry.trigger.inputs))
         self._set_buffer(self.then_view, print_chain(entry.then))
+        self.block_editor.set_chain(entry.then)
         if self.device_combo.get_active_id() != entry.trigger.device:
             self.device_combo.set_active_id(entry.trigger.device)
 
@@ -596,6 +621,23 @@ class Window(Gtk.Window):
             return
         self.controller.edit_entry(
             lambda e: replace(e, trigger=replace(e.trigger, device=key))
+        )
+
+    def _current_variables(self) -> tuple[str, ...]:
+        profile = self.controller.profile
+        return profile.variables if profile is not None else ()
+
+    def _on_text_toggled(self, button: Gtk.ToggleButton) -> None:
+        self.then_stack.set_visible_child_name(
+            "text" if button.get_active() else "blocks"
+        )
+
+    def _on_blocks_changed(self, chain: Chain, typing: bool) -> None:
+        if self._refreshing:
+            return
+        self.entry_error.set_text("")
+        self.controller.edit_entry(
+            lambda e: replace(e, then=chain), merge_key="then" if typing else None
         )
 
     def _on_then_changed(self, buffer: Gtk.TextBuffer) -> None:

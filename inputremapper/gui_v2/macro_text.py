@@ -232,3 +232,19 @@ def _print_value(value: Value, spec: ArgSpec) -> str:
     if _BARE_WORD.match(value) and value != "None":
         return value
     return f'"{value}"'
+
+
+def parse_arg(raw: str, spec: ArgSpec) -> Value:
+    """The value of one argument field, as typed."""
+    return _parse_value(raw, spec)
+
+
+def print_arg(value: Value, spec: ArgSpec) -> str:
+    """One argument as shown in its field: bare, without quotes where possible."""
+    if value is None:
+        return ""
+    if isinstance(value, tuple):
+        return print_chain(value)
+    if isinstance(value, str) and spec.kind in (ArgKind.SYMBOL, ArgKind.VARIABLE):
+        return value
+    return _print_value(value, spec)
