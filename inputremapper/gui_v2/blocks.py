@@ -146,6 +146,40 @@ def _all_key_names() -> list[str]:
     return sorted(name for name in ecodes.ecodes if name.startswith(("KEY_", "BTN_")))
 
 
+_MOUSE_BUTTONS = {
+    "BTN_LEFT",
+    "BTN_RIGHT",
+    "BTN_MIDDLE",
+    "BTN_SIDE",
+    "BTN_EXTRA",
+    "BTN_FORWARD",
+    "BTN_BACK",
+    "BTN_TASK",
+}
+
+# Titles of the key blocks by what they act on: a key, a mouse button or another
+# (gamepad) button.
+_KEY_BLOCK_TITLES = {
+    "key": ("press", "click", "press button"),
+    "key_down": ("key down", "mouse down", "button down"),
+    "key_up": ("key up", "mouse up", "button up"),
+}
+
+
+def block_title(call: Call) -> str:
+    """What a block is called; key blocks say "mouse" for mouse buttons."""
+    titles = _KEY_BLOCK_TITLES.get(call.op)
+    symbol = call.args[0] if call.args else None
+    if titles is None or not isinstance(symbol, str):
+        return TITLES.get(call.op, call.op)
+    name = symbol.upper()
+    if name in _MOUSE_BUTTONS:
+        return titles[1]
+    if name.startswith("BTN_"):
+        return titles[2]
+    return titles[0]
+
+
 def _contains(
     completion: Gtk.EntryCompletion, key: str, row: Gtk.TreeIter, *_: Any
 ) -> bool:
@@ -201,6 +235,7 @@ class _Field:
 
 class _Block:
     def __init__(self) -> None:
+        self.title: Gtk.Label | None = None
         self.fields: list[_Field] = []
         self.slots: list[tuple[int, _Stack]] = []
 
@@ -231,6 +266,10 @@ class _Stack:
     def update(self, chain: Chain) -> None:
         for block, call in zip(self.blocks, chain, strict=True):
             args = full_args(call)
+            if block.title is not None:
+                title = block_title(call)
+                if block.title.get_text() != title:
+                    block.title.set_text(title)
             for field in block.fields:
                 if field.arg_index < len(args):
                     field.show(args[field.arg_index])
@@ -402,7 +441,8 @@ class BlockEditor(Gtk.ScrolledWindow):
         handle.get_style_context().add_class("v2-handle")
         self._make_drag_source(handle, frame, path, index)
         header.pack_start(handle, False, False, 0)
-        title = Gtk.Label(label=TITLES.get(call.op, call.op), xalign=0)
+        title = Gtk.Label(label=block_title(call), xalign=0)
+        block.title = title
         title.get_style_context().add_class("v2-block-title")
         header.pack_start(title, False, False, 0)
 
