@@ -704,7 +704,9 @@ class BlockEditor(Gtk.ScrolledWindow):
 
     @staticmethod
     def _completion(model: Gtk.ListStore) -> Gtk.EntryCompletion:
-        completion = Gtk.EntryCompletion(model=model, text_column=0)
+        completion = Gtk.EntryCompletion(model=model)
+        # The method, not the property: only it adds the renderer that draws the text.
+        completion.set_text_column(0)
         completion.set_inline_completion(False)
         completion.set_popup_single_match(False)
         # Match anywhere in the name, so "left" finds BTN_LEFT and KEY_LEFTSHIFT.
