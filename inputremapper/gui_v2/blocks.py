@@ -68,7 +68,7 @@ CATEGORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "Keys",
         "#4c97ff",
-        ("symbol", "key", "key_down", "key_up", "hold_keys", "modify", "hold"),
+        ("key", "key_down", "key_up", "hold_keys", "modify", "hold"),
     ),
     ("Timing", "#3fb8c9", ("wait", "repeat")),
     ("Mouse", "#59c059", ("mouse", "mouse_xy", "wheel")),
@@ -182,7 +182,7 @@ _KEY_BLOCK_TITLES = {
 
 # The palette says what a block can act on, since it isn't chosen yet.
 PALETTE_TITLES = {
-    "symbol": "type character / key (held while pressed)",
+    "hold_keys": "hold keys down until released",
     "key": "press key / click / button",
     "key_down": "key / mouse / button down",
     "key_up": "key / mouse / button up",
@@ -190,11 +190,10 @@ PALETTE_TITLES = {
 
 # Extra words that find a block when searching the palette.
 PALETTE_KEYWORDS = {
-    "symbol": "text typing output ascii letter digit remap replace hold",
     "key": "tap type click mouse button",
     "key_down": "hold press mouse button",
     "key_up": "release mouse button",
-    "hold_keys": "press together chord",
+    "hold_keys": "press together chord type text output ascii remap replace",
     "wait": "delay sleep pause",
     "mouse": "cursor pointer move",
     "mouse_xy": "cursor pointer move",

@@ -182,6 +182,10 @@ def entry_from_mapping(mapping: dict[str, Any], device: str | None) -> Entry:
     if output:
         try:
             then = parse_text(output)
+            if len(then) == 1 and then[0].op == "symbol":
+                # v1's plain "type this key" output holds the key while the trigger
+                # is held; `hold_keys` is that, as a block that combines with others.
+                then = (Call("hold_keys", (str(then[0].args[0]),)),)
         except MacroTextError:
             # Keep the original text; the block editor shows it as a grey block.
             then = (Call("raw", (output,)),)

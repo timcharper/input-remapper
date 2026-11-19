@@ -205,6 +205,8 @@ class TestRender(unittest.TestCase):
         self.assertEqual(len(entries), 3)
         self.assertEqual(entries[2].then, ())
         rendered = render_profile(Profile("p", tuple(entries)))["kbd"]
+        # A plain key output is upgraded to the equivalent macro.
+        original[0]["output_symbol"] = "hold_keys(KEY_B)"
         for before, after in zip(original, rendered):
             self.assertEqual(before, after)
 
