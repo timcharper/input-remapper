@@ -46,15 +46,17 @@ from inputremapper.ipc.pipe import Pipe
 from inputremapper.logging.logger import logger
 
 
-def ensure_reader_service() -> None:
+def ensure_reader_service() -> bool:
     """Start the root helper that reads keys, if it isn't running yet.
+
+    Returns whether it was started just now.
 
     It is started from this source tree and not via `input-remapper-control`: that
     would run whichever version is installed on the system, which may use different
     pipe paths than this code, and then the two never find each other.
     """
     if ProcessUtils.count_python_processes("input-remapper-reader-service") >= 1:
-        return
+        return False
 
     root = Path(__file__).resolve().parents[2]
     command = [
@@ -79,6 +81,7 @@ def ensure_reader_service() -> None:
         )
     except OSError as error:
         raise RecorderError(f"Could not start the reader service: {error}") from error
+    return True
 
 
 def main() -> None:

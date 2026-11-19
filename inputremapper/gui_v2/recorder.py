@@ -31,7 +31,11 @@ from typing import Any, Protocol
 
 from evdev import ecodes
 
-from inputremapper.gui.reader_service import CMD_STOP_READING, MSG_EVENT
+from inputremapper.gui.reader_service import (
+    CMD_STOP_READING,
+    MSG_EVENT,
+    MSG_STATUS,
+)
 from inputremapper.gui_v2.document import InputRef
 
 # Events that devices send while a key is held but that are no real input.
@@ -93,7 +97,7 @@ class Recorder:
         self,
         results: PipeLike,
         commands: PipeLike,
-        ensure_service: Callable[[], None] = lambda: None,
+        ensure_service: Callable[[], bool] = lambda: False,
     ) -> None:
         self._results = results
         self._commands = commands
@@ -101,6 +105,9 @@ class Recorder:
         self._accumulator: Accumulator | None = None
         self._on_update: Callable[[tuple[InputRef, ...]], None] = lambda _: None
         self._on_done: Callable[[], None] = lambda: None
+        # A freshly started service empties the commands pipe while it starts up,
+        # so the device is only sent once it reports being ready.
+        self._pending_group: str | None = None
 
     @property
     def recording(self) -> bool:
@@ -112,16 +119,20 @@ class Recorder:
         on_update: Callable[[tuple[InputRef, ...]], None],
         on_done: Callable[[], None],
     ) -> None:
-        self._ensure_service()
+        started = self._ensure_service()
         self._accumulator = Accumulator()
         self._on_update = on_update
         self._on_done = on_done
         # Drop anything left over from an earlier recording.
         while self._results.poll():
             self._results.recv()
-        self._commands.send(group_key)
+        if started:
+            self._pending_group = group_key
+        else:
+            self._commands.send(group_key)
 
     def stop(self) -> None:
+        self._pending_group = None
         if self._accumulator is None:
             return
         self._accumulator = None
@@ -132,6 +143,10 @@ class Recorder:
         while self._results.poll():
             message = self._results.recv()
             accumulator = self._accumulator
+            if message.get("type") == MSG_STATUS and self._pending_group is not None:
+                group, self._pending_group = self._pending_group, None
+                self._commands.send(group)
+                continue
             if accumulator is None or message.get("type") != MSG_EVENT:
                 continue
 

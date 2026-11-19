@@ -25,7 +25,7 @@ from typing import Any
 
 from evdev import ecodes
 
-from inputremapper.gui.reader_service import CMD_STOP_READING, MSG_EVENT
+from inputremapper.gui.reader_service import CMD_STOP_READING, MSG_EVENT, MSG_STATUS
 from inputremapper.gui_v2.controller import Controller
 from inputremapper.gui_v2.document import InputRef
 from inputremapper.gui_v2.recorder import Accumulator, Recorder
@@ -118,6 +118,16 @@ class TestRecorder(unittest.TestCase):
         self.assertEqual(self.done, 1)
         self.assertFalse(self.recorder.recording)
         self.assertEqual(self.commands.messages[-1], CMD_STOP_READING)
+
+    def test_a_freshly_started_service_gets_the_device_once_ready(self) -> None:
+        # The service empties the commands pipe while starting, so sending early
+        # would lose the device.
+        self.recorder = Recorder(self.results, self.commands, lambda: True)
+        self._start()
+        self.assertEqual(self.commands.messages, [])
+        self.results.messages.append({"type": MSG_STATUS, "message": "ready"})
+        self.recorder.poll()
+        self.assertEqual(self.commands.messages, ["kbd"])
 
     def test_old_events_from_before_start_are_dropped(self) -> None:
         self.results.messages.append(event(A, True))
