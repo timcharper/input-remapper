@@ -25,7 +25,12 @@ from typing import Any
 
 from evdev import ecodes
 
-from inputremapper.gui.reader_service import CMD_STOP_READING, MSG_EVENT, MSG_STATUS
+from inputremapper.gui.forward_to_ui_handler import CMD_READ_ALL
+from inputremapper.gui.reader_service import (
+    CMD_STOP_READING,
+    MSG_EVENT,
+    MSG_STATUS,
+)
 from inputremapper.gui_v2.controller import Controller
 from inputremapper.gui_v2.document import InputRef
 from inputremapper.gui_v2.recorder import Accumulator, Recorder
@@ -99,7 +104,9 @@ class TestRecorder(unittest.TestCase):
         self.recorder = Recorder(self.results, self.commands)
 
     def _start(self) -> None:
-        self.recorder.start("kbd", self.updates.append, self._done)
+        self.recorder.start(
+            "kbd", lambda inputs, _: self.updates.append(inputs), self._done
+        )
 
     def _done(self) -> None:
         self.done += 1
@@ -129,6 +136,27 @@ class TestRecorder(unittest.TestCase):
         self.recorder.poll()
         self.assertEqual(self.commands.messages, ["kbd"])
 
+    def test_all_devices_locks_onto_the_first_one_pressed(self) -> None:
+        groups: list[str] = []
+        self.recorder.start(None, lambda _, group: groups.append(group), self._done)
+        self.assertEqual(self.commands.messages, [CMD_READ_ALL])
+
+        def tagged(code: int, pressed: bool, group: str) -> dict[str, Any]:
+            message = event(code, pressed)
+            message["message"]["group"] = group
+            return message
+
+        self.results.messages += [
+            tagged(A, False, "mouse"),  # a release of something unseen: no lock
+            tagged(A, True, "kbd"),
+            tagged(CTRL, True, "mouse"),  # other device, ignored
+            tagged(CTRL, False, "mouse"),
+            tagged(A, False, "kbd"),
+        ]
+        self.recorder.poll()
+        self.assertEqual(groups, ["kbd"])
+        self.assertEqual(self.done, 1)
+
     def test_old_events_from_before_start_are_dropped(self) -> None:
         self.results.messages.append(event(A, True))
         self._start()
@@ -147,13 +175,13 @@ class FakeRecorder:
     def __init__(self) -> None:
         self.recording = False
         self.group: str | None = None
-        self.on_update: Callable[[tuple[InputRef, ...]], None] = lambda _: None
+        self.on_update: Callable[[tuple[InputRef, ...], str], None] = lambda *_: None
         self.on_done: Callable[[], None] = lambda: None
 
     def start(
         self,
-        group_key: str,
-        on_update: Callable[[tuple[InputRef, ...]], None],
+        group_key: str | None,
+        on_update: Callable[[tuple[InputRef, ...], str], None],
         on_done: Callable[[], None],
     ) -> None:
         self.recording = True
@@ -192,17 +220,29 @@ class TestControllerRecording(unittest.TestCase):
             lambda e: replace(e, trigger=replace(e.trigger, device="kbd"))
         )
 
-    def test_needs_a_device(self) -> None:
+    def test_without_a_device_listens_to_all_and_fills_it_in(self) -> None:
         self.c.start_recording()
-        self.assertFalse(self.recorder.recording)
-        self.assertIn("device", self.c.message)
+        self.assertTrue(self.recorder.recording)
+        self.assertIsNone(self.recorder.group)
+        self.recorder.on_update((InputRef(1, A),), "mouse")
+        entry = self.c.entry
+        assert entry is not None
+        self.assertEqual(entry.trigger.device, "mouse")
+
+    def test_a_chosen_device_is_kept(self) -> None:
+        self._set_device()
+        self.c.start_recording()
+        self.recorder.on_update((InputRef(1, A),), "other")
+        entry = self.c.entry
+        assert entry is not None
+        self.assertEqual(entry.trigger.device, "kbd")
 
     def test_recorded_keys_become_one_undo_step(self) -> None:
         self._set_device()
         self.c.start_recording()
         self.assertEqual(self.recorder.group, "kbd")
-        self.recorder.on_update((InputRef(1, CTRL),))
-        self.recorder.on_update((InputRef(1, CTRL), InputRef(1, A)))
+        self.recorder.on_update((InputRef(1, CTRL),), "kbd")
+        self.recorder.on_update((InputRef(1, CTRL), InputRef(1, A)), "kbd")
         entry = self.c.entry
         assert entry is not None
         self.assertEqual(len(entry.trigger.inputs), 2)

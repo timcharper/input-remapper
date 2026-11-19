@@ -53,6 +53,8 @@ from inputremapper.logging.logger import logger
 CMD_TERMINATE = "terminate"
 CMD_STOP_READING = "stop-reading"
 CMD_REFRESH_GROUPS = "refresh_groups"
+# Read every device group at once. Events then carry the "group" they came from.
+CMD_READ_ALL = "read-all"
 
 # sent by the reader-service to the reader
 MSG_GROUPS = "groups"
@@ -63,8 +65,9 @@ MSG_STATUS = "status"
 class ForwardToUIHandler(MappingHandler):
     """Implements the MappingHandler protocol. Sends all events into the pipe."""
 
-    def __init__(self, pipe: Pipe) -> None:
+    def __init__(self, pipe: Pipe, group_key: str | None = None) -> None:
         self.pipe = pipe
+        self.group_key = group_key
         self._last_event = InputEvent.from_tuple((99, 99, 99))
 
     def notify(
@@ -111,6 +114,8 @@ class ForwardToUIHandler(MappingHandler):
             "direction": direction,
             "origin_hash": event.origin_hash,
         }
+        if self.group_key is not None:
+            message["group"] = self.group_key
         logger.debug("Sending %s to frontend", message)
         self.pipe.send(
             {

@@ -59,8 +59,8 @@ class RecorderLike(Protocol):
 
     def start(
         self,
-        group_key: str,
-        on_update: Callable[[tuple[InputRef, ...]], None],
+        group_key: str | None,
+        on_update: Callable[[tuple[InputRef, ...], str], None],
         on_done: Callable[[], None],
     ) -> None: ...
 
@@ -317,14 +317,16 @@ class Controller:
     # Recording -----------------------------------------------------------------
 
     def start_recording(self) -> None:
-        """Record the trigger keys of the selected entry from its device."""
+        """Record the trigger keys of the selected entry.
+
+        From its device if it has one, otherwise from all devices, and the device the
+        keys were pressed on is then filled in.
+        """
         entry = self.entry
         if entry is None:
             return
         if self.recorder is None:
             self.message = "Recording is not available"
-        elif entry.trigger.device is None:
-            self.message = "Choose a device first, then record"
         else:
             self.message = "Press the keys now, release them all to finish"
             try:
@@ -347,10 +349,15 @@ class Controller:
         else:
             self.start_recording()
 
-    def _recorded(self, inputs: tuple[InputRef, ...]) -> None:
+    def _recorded(self, inputs: tuple[InputRef, ...], group_key: str) -> None:
         # Each key added to the combination coalesces into one undo step.
         self.edit_entry(
-            lambda e: replace(e, trigger=replace(e.trigger, inputs=inputs)),
+            lambda e: replace(
+                e,
+                trigger=replace(
+                    e.trigger, inputs=inputs, device=e.trigger.device or group_key
+                ),
+            ),
             merge_key="record",
         )
 

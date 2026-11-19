@@ -32,6 +32,7 @@ from typing import Any, Protocol
 from evdev import ecodes
 
 from inputremapper.gui.reader_service import (
+    CMD_READ_ALL,
     CMD_STOP_READING,
     MSG_EVENT,
     MSG_STATUS,
@@ -103,11 +104,12 @@ class Recorder:
         self._commands = commands
         self._ensure_service = ensure_service
         self._accumulator: Accumulator | None = None
-        self._on_update: Callable[[tuple[InputRef, ...]], None] = lambda _: None
+        self._on_update: Callable[[tuple[InputRef, ...], str], None] = lambda *_: None
         self._on_done: Callable[[], None] = lambda: None
         # A freshly started service empties the commands pipe while it starts up,
         # so the device is only sent once it reports being ready.
         self._pending_group: str | None = None
+        self._locked_group: str | None = None
 
     @property
     def recording(self) -> bool:
@@ -115,10 +117,15 @@ class Recorder:
 
     def start(
         self,
-        group_key: str,
-        on_update: Callable[[tuple[InputRef, ...]], None],
+        group_key: str | None,
+        on_update: Callable[[tuple[InputRef, ...], str], None],
         on_done: Callable[[], None],
     ) -> None:
+        """Record from one device group, or from all of them if `group_key` is None.
+
+        `on_update` also gets the group the keys were pressed on. When listening to
+        all devices, the first key pressed decides the group; the others are ignored.
+        """
         started = self._ensure_service()
         self._accumulator = Accumulator()
         self._on_update = on_update
@@ -126,10 +133,12 @@ class Recorder:
         # Drop anything left over from an earlier recording.
         while self._results.poll():
             self._results.recv()
+        self._locked_group = group_key
+        command = group_key if group_key is not None else CMD_READ_ALL
         if started:
-            self._pending_group = group_key
+            self._pending_group = command
         else:
-            self._commands.send(group_key)
+            self._commands.send(command)
 
     def stop(self) -> None:
         self._pending_group = None
@@ -151,6 +160,14 @@ class Recorder:
                 continue
 
             body = message["message"]
+            group = body.get("group", self._locked_group)
+            if self._locked_group is None:
+                if not _is_pressed(body) or body["type"] != ecodes.EV_KEY:
+                    continue
+                self._locked_group = group
+            elif group != self._locked_group:
+                continue
+
             changed = accumulator.feed(
                 body["type"],
                 body["code"],
@@ -158,7 +175,7 @@ class Recorder:
                 _is_pressed(body),
             )
             if changed:
-                self._on_update(tuple(accumulator.inputs))
+                self._on_update(tuple(accumulator.inputs), self._locked_group or "")
             if accumulator.finished:
                 done = self._on_done
                 self.stop()
