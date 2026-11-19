@@ -220,7 +220,11 @@ class Window(Gtk.Window):
         add = Gtk.Button(label="+ Add")
         add.connect("clicked", lambda *_: self.controller.new_entry())
         self.add_menu_button = Gtk.MenuButton()
-        self.add_menu_button.connect("clicked", self._populate_add_menu)
+        # A menu button without a popup is insensitive, so attach one right away
+        # and refill it each time it opens, so new presets show up.
+        self.add_menu = Gtk.Menu()
+        self.add_menu.connect("show", lambda *_: self._populate_add_menu())
+        self.add_menu_button.set_popup(self.add_menu)
         combo.pack_start(add, False, False, 0)
         combo.pack_start(self.add_menu_button, False, False, 0)
         combo.set_halign(Gtk.Align.START)
@@ -570,8 +574,10 @@ class Window(Gtk.Window):
         self.entry_error.set_text("")
         self.controller.edit_entry(lambda e: replace(e, then=chain), merge_key="then")
 
-    def _populate_add_menu(self, button: Gtk.MenuButton) -> None:
-        menu = Gtk.Menu()
+    def _populate_add_menu(self) -> None:
+        menu = self.add_menu
+        for old in menu.get_children():
+            menu.remove(old)
         new = Gtk.MenuItem(label="New")
         new.connect("activate", lambda *_: self.controller.new_entry())
         menu.append(new)
@@ -590,7 +596,6 @@ class Window(Gtk.Window):
         importer.set_submenu(submenu)
         menu.append(importer)
         menu.show_all()
-        button.set_popup(menu)
 
     def _on_variables(self) -> None:
         profile = self.controller.profile
