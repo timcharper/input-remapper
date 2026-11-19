@@ -132,7 +132,12 @@ class Window(Gtk.Window):
     @staticmethod
     def _install_css() -> None:
         provider = Gtk.CssProvider()
-        provider.load_from_data(b".v2-record image { color: #e01b24; }")
+        provider.load_from_data(
+            b".v2-record image { color: #e01b24; }"
+            b".v2-input-frame { border: 1px solid @borders; border-radius: 4px; }"
+            b".v2-input { background-color: @theme_base_color; }"
+            b".v2-input-frame:focus-within { border-color: @theme_selected_bg_color; }"
+        )
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(),
             provider,
@@ -603,13 +608,31 @@ class Window(Gtk.Window):
             return
         dialog = Gtk.Dialog(title="Variables", transient_for=self, modal=True)
         dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
-        dialog.get_content_area().add(
-            Gtk.Label(label="One variable name per line", xalign=0)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(area, f"set_margin_{side}")(12)
+        label = Gtk.Label(label="One variable name per line", xalign=0)
+        label.get_style_context().add_class("dim-label")
+        area.add(label)
+        view = Gtk.TextView(
+            monospace=True,
+            left_margin=8,
+            right_margin=8,
+            top_margin=6,
+            bottom_margin=6,
         )
-        view = Gtk.TextView()
-        view.set_size_request(280, 160)
+        view.get_style_context().add_class("v2-input")
         view.get_buffer().set_text("\n".join(profile.variables))
-        dialog.get_content_area().add(view)
+        scrolled = Gtk.ScrolledWindow(
+            shadow_type=Gtk.ShadowType.IN,
+            min_content_width=300,
+            min_content_height=180,
+        )
+        scrolled.get_style_context().add_class("v2-input-frame")
+        scrolled.add(view)
+        area.pack_start(scrolled, True, True, 0)
+        view.grab_focus()
         dialog.show_all()
         if dialog.run() == Gtk.ResponseType.OK:
             self.controller.set_variables(
