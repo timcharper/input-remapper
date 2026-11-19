@@ -52,3 +52,13 @@ it in `tests/unit/test_gui_v2/test_controller.py`.
 
 Known stand-ins: the trigger is typed as key names (`trigger_text.py`) until recording
 from a device exists, and "Then" is the macro text until the block editor is built.
+
+## Window conventions
+
+- Widgets are created once and updated in place (keyed rows, write a field only if its
+  value differs and it isn't focused). Never rebuild a list on refresh.
+- Refreshes are scheduled with `GLib.idle_add` (`Window.schedule_refresh`), never run
+  inside a signal handler: destroying a widget in its own handler segfaulted.
+- Handlers check `self._refreshing` first, so programmatic updates don't become edits.
+- Layout: profile bar on top (combo with "+ New profile", ▶ on the running one, rename,
+  variables, clone, delete, play/stop), entries list on the left, entry form on the right.
