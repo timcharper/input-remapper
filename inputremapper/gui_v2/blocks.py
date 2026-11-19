@@ -39,7 +39,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from evdev import ecodes
-from gi.repository import Gdk, Gtk
+from gi.repository import Gdk, GLib, Gtk
 
 from inputremapper.configs.keyboard_layout import keyboard_layout
 from inputremapper.gui_v2.block_ops import (
@@ -233,6 +233,82 @@ def block_title(call: Call) -> str:
     if name.startswith("BTN_"):
         return titles[2]
     return titles[0]
+
+
+def _is_valid_key(text: str) -> bool:
+    """Whether the engine knows this key name (or it is a variable)."""
+    return text.startswith("$") or keyboard_layout.get(text) is not None
+
+
+def canonical_key(text: str) -> str:
+    """The name as the engine spells it, for text typed in any case."""
+    if text.startswith("$"):
+        return text
+    return keyboard_layout.correct_case(text)
+
+
+def _key_entry_behavior(
+    entry: Gtk.Entry,
+    combo: Gtk.ComboBox,
+    names: Gtk.ListStore,
+    needle: list[str],
+    shown: Gtk.TreeModelFilter,
+) -> None:
+    """Typing completes to the first name that starts with it, the drop-down
+    narrows to the matches, and leaving the field with something that isn't a key
+    clears it."""
+    typed_length = [0]
+
+    def on_changed(widget: Gtk.Entry) -> None:
+        text = widget.get_text()
+        # Once the text is a whole key, the drop-down offers everything again.
+        needle[0] = "" if _is_valid_key(text) else text.lower()
+        shown.refilter()
+
+        grew = len(text) > typed_length[0]
+        typed_length[0] = len(text)
+        if not grew or not text or widget.get_selection_bounds():
+            return
+        lower = text.lower()
+        first = next((n[0] for n in names if str(n[0]).lower().startswith(lower)), None)
+        if first is not None and first != text and widget.has_focus():
+
+            def complete() -> bool:
+                if widget.get_text() == text:
+                    widget.set_text(first)
+                    widget.select_region(len(text), -1)
+                return False
+
+            GLib.idle_add(complete)
+
+    def settle(*_: Any) -> bool:
+        # Not while the user is still in the field or choosing from the list.
+        if entry.has_focus() or combo.get_property("popup-shown"):
+            return False
+        text = entry.get_text()
+        if text and not _is_valid_key(text):
+            entry.set_text("")
+        elif text and canonical_key(text) != text:
+            entry.set_text(canonical_key(text))
+        return False
+
+    def on_activate(widget: Gtk.Entry) -> None:
+        text = widget.get_text()
+        if text and not _is_valid_key(text):
+            lower = text.lower()
+            first = next((n[0] for n in names if lower in str(n[0]).lower()), None)
+            if first is not None:
+                widget.set_text(first)
+
+    entry.connect("changed", on_changed)
+    entry.connect("activate", on_activate)
+
+    def settle_later(*_: Any) -> bool:
+        GLib.idle_add(settle)
+        return False  # Let GTK carry on handling the event.
+
+    entry.connect("focus-out-event", settle_later)
+    combo.connect("notify::popup-shown", settle_later)
 
 
 def _contains(
@@ -700,13 +776,22 @@ class BlockEditor(Gtk.ScrolledWindow):
             names = (
                 self._typed_names if arg is _PSEUDO_ARG["symbol"] else self._key_names
             )
-            combo = Gtk.ComboBox.new_with_model_and_entry(names)
+            # The drop-down only lists what matches what has been typed.
+            needle = [""]
+
+            def listed(model: Gtk.TreeModel, row: Gtk.TreeIter, _data: Any) -> bool:
+                return needle[0] in str(model[row][0]).lower()
+
+            shown = names.filter_new()
+            shown.set_visible_func(listed, None)
+            combo = Gtk.ComboBox.new_with_model_and_entry(shown)
             combo.set_entry_text_column(0)
             entry = combo.get_child()
             assert isinstance(entry, Gtk.Entry)
             entry.set_width_chars(18)
             entry.set_completion(self._completion(names))
             widget = combo
+            _key_entry_behavior(entry, combo, names, needle, shown)
         else:
             entry = Gtk.Entry(width_chars=6)
             widget = entry
@@ -724,7 +809,10 @@ class BlockEditor(Gtk.ScrolledWindow):
         def changed(widget: Gtk.Entry) -> None:
             if self._updating:
                 return
-            value = parse_arg(widget.get_text(), arg)
+            text = widget.get_text()
+            if arg.kind is ArgKind.SYMBOL and text and not _is_valid_key(text):
+                return  # Half typed; it is only stored once it names a key.
+            value = parse_arg(canonical_key(text) if text else text, arg)
             self._commit(set_arg(self._base, path, index, arg_index, value), True)
 
         entry.connect("changed", changed)
