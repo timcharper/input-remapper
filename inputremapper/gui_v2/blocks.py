@@ -30,6 +30,7 @@ are rewritten (unless focused); only a change of structure rebuilds the widgets.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -143,6 +144,29 @@ ARG_LABELS = {
 
 def _all_key_names() -> list[str]:
     return sorted(name for name in ecodes.ecodes if name.startswith(("KEY_", "BTN_")))
+
+
+def _contains(
+    completion: Gtk.EntryCompletion, key: str, row: Gtk.TreeIter, *_: Any
+) -> bool:
+    model = completion.get_model()
+    return model is not None and key.lower() in str(model[row][0]).lower()
+
+
+# A number, or a variable like $name that stands for one.
+_NUMBER_OR_VARIABLE = re.compile(r"^(-?\d*\.?\d*|\$\w*)$")
+
+
+def _is_numeric(arg: ArgSpec) -> bool:
+    """Arguments that are numbers (or variables) and never text."""
+    return arg.kind is ArgKind.VALUE and arg.accepts_number and not arg.accepts_str
+
+
+def _only_numbers(entry: Gtk.Entry, text: str, _length: int, position: int) -> None:
+    current = entry.get_text()
+    result = current[:position] + text + current[position:]
+    if not _NUMBER_OR_VARIABLE.match(result):
+        entry.stop_emission_by_name("insert-text")
 
 
 def shape(chain: Chain) -> tuple[Any, ...]:
@@ -498,13 +522,25 @@ class BlockEditor(Gtk.ScrolledWindow):
             text.get_style_context().add_class("dim-label")
             header.pack_start(text, False, False, 0)
 
-        entry = Gtk.Entry(width_chars=18 if arg.kind is ArgKind.SYMBOL else 6)
-        entry.get_style_context().add_class("v2-field")
+        widget: Gtk.Widget
         if arg.kind is ArgKind.SYMBOL:
+            # A drop-down of every key, which also narrows as you type.
+            combo = Gtk.ComboBox.new_with_model_and_entry(self._key_names)
+            combo.set_entry_text_column(0)
+            entry = combo.get_child()
+            assert isinstance(entry, Gtk.Entry)
+            entry.set_width_chars(18)
             entry.set_completion(self._completion(self._key_names))
-        elif arg.kind is ArgKind.VARIABLE:
-            entry.set_completion(self._completion(self._variable_names))
-        header.pack_start(entry, False, False, 0)
+            widget = combo
+        else:
+            entry = Gtk.Entry(width_chars=6)
+            widget = entry
+            if arg.kind is ArgKind.VARIABLE:
+                entry.set_completion(self._completion(self._variable_names))
+            elif _is_numeric(arg):
+                entry.connect("insert-text", _only_numbers)
+        entry.get_style_context().add_class("v2-field")
+        header.pack_start(widget, False, False, 0)
         if arg.unit:
             unit = Gtk.Label(label=arg.unit)
             unit.get_style_context().add_class("dim-label")
@@ -524,6 +560,8 @@ class BlockEditor(Gtk.ScrolledWindow):
         completion = Gtk.EntryCompletion(model=model, text_column=0)
         completion.set_inline_completion(False)
         completion.set_popup_single_match(False)
+        # Match anywhere in the name, so "left" finds BTN_LEFT and KEY_LEFTSHIFT.
+        completion.set_match_func(_contains, None)
         return completion
 
     def _make_drag_source(
