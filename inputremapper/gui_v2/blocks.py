@@ -43,6 +43,7 @@ from gi.repository import Gdk, Gtk
 
 from inputremapper.gui_v2.block_ops import (
     ChainPath,
+    call_gap,
     can_move,
     default_call,
     full_args,
@@ -275,6 +276,7 @@ class _Field:
 
 class _Block:
     def __init__(self) -> None:
+        self.frame: Gtk.Widget | None = None
         self.title: Gtk.Label | None = None
         self.fields: list[_Field] = []
         self.slots: list[tuple[int, _Stack]] = []
@@ -306,6 +308,18 @@ class _Stack:
     def update(self, chain: Chain) -> None:
         for block, call in zip(self.blocks, chain, strict=True):
             args = full_args(call)
+            if block.frame is not None:
+                # Outline blocks that can't be applied yet, and say why on hover.
+                gap = call_gap(call)
+                context = block.frame.get_style_context()
+                if (gap is not None) != context.has_class("v2-incomplete"):
+                    if gap is None:
+                        context.remove_class("v2-incomplete")
+                    else:
+                        context.add_class("v2-incomplete")
+                block.frame.set_tooltip_text(
+                    gap[0].upper() + gap[1:] if gap is not None else None
+                )
             if block.title is not None:
                 title = block_title(call)
                 if block.title.get_text() != title:
@@ -523,6 +537,7 @@ class BlockEditor(Gtk.ScrolledWindow):
         color = CATEGORY_COLORS.get(call.op, "#8a8a8a")
 
         frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        block.frame = frame
         frame.get_style_context().add_class("v2-block")
         frame.get_style_context().add_class(CATEGORY_CLASS.get(color, "v2-cat-raw"))
 
@@ -734,6 +749,7 @@ _BASE_CSS = """
 .v2-block { border-radius: 6px; padding: 6px 8px; border-left: 5px solid #8a8a8a;
     background-color: alpha(#8a8a8a, 0.14); }
 .v2-block-title { font-weight: bold; }
+.v2-block.v2-incomplete { box-shadow: inset 0 0 0 2px #e01b24; }
 .v2-slot { margin-left: 14px; padding: 2px 0 2px 8px;
     border-left: 3px solid alpha(currentColor, 0.2); }
 .v2-gap { min-height: 6px; border-radius: 3px; background: transparent; }

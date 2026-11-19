@@ -204,3 +204,36 @@ def move_call(
 
 def block_spec(call: Call) -> BlockSpec | None:
     return SCHEMA.get(call.op)
+
+
+def call_gap(call: Call) -> str | None:
+    """What a block itself is missing, or None. Nested blocks are not looked at."""
+    spec = SCHEMA.get(call.op)
+    if spec is None:
+        return None
+    for index, value in enumerate(call.args):
+        arg = spec.args[0 if spec.spread else index]
+        if arg.kind is ArgKind.SYMBOL and value == "":
+            return f'a "{call.op}" block has no key chosen'
+        if arg.kind is ArgKind.VARIABLE and isinstance(value, Var) and not value.name:
+            return f'a "{call.op}" block has no variable chosen'
+        if arg.kind is ArgKind.MACRO and arg.required and not slot_chain(value):
+            return f'a "{call.op}" block is empty'
+    return None
+
+
+def first_gap(chain: Chain) -> str | None:
+    """The first thing missing anywhere in the macro, or None if it is complete."""
+    for call in chain:
+        gap = call_gap(call)
+        if gap is not None:
+            return gap
+        spec = SCHEMA.get(call.op)
+        if spec is None:
+            continue
+        for value in call.args:
+            if is_chain(value):
+                inner = first_gap(cast("Chain", value))
+                if inner is not None:
+                    return inner
+    return None
