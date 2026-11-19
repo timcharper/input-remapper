@@ -319,8 +319,8 @@ class Controller:
     def start_recording(self) -> None:
         """Record the trigger keys of the selected entry.
 
-        From its device if it has one, otherwise from all devices, and the device the
-        keys were pressed on is then filled in.
+        Always listens to every device, whatever the entry's device is now, and sets
+        the entry's device to the one the keys were pressed on.
         """
         entry = self.entry
         if entry is None:
@@ -330,9 +330,7 @@ class Controller:
         else:
             self.message = "Press the keys now, release them all to finish"
             try:
-                self.recorder.start(
-                    entry.trigger.device, self._recorded, self._recording_done
-                )
+                self.recorder.start(None, self._recorded, self._recording_done)
             except RecorderError as error:
                 self.message = str(error)
         self._changed()
@@ -354,9 +352,7 @@ class Controller:
         self.edit_entry(
             lambda e: replace(
                 e,
-                trigger=replace(
-                    e.trigger, inputs=inputs, device=e.trigger.device or group_key
-                ),
+                trigger=replace(e.trigger, inputs=inputs, device=group_key),
             ),
             merge_key="record",
         )

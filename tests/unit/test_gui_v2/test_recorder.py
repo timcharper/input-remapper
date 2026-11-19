@@ -220,7 +220,7 @@ class TestControllerRecording(unittest.TestCase):
             lambda e: replace(e, trigger=replace(e.trigger, device="kbd"))
         )
 
-    def test_without_a_device_listens_to_all_and_fills_it_in(self) -> None:
+    def test_listens_to_all_devices_and_fills_in_the_one_used(self) -> None:
         self.c.start_recording()
         self.assertTrue(self.recorder.recording)
         self.assertIsNone(self.recorder.group)
@@ -229,18 +229,19 @@ class TestControllerRecording(unittest.TestCase):
         assert entry is not None
         self.assertEqual(entry.trigger.device, "mouse")
 
-    def test_a_chosen_device_is_kept(self) -> None:
+    def test_a_chosen_device_does_not_filter_and_is_replaced(self) -> None:
         self._set_device()
         self.c.start_recording()
+        self.assertIsNone(self.recorder.group)
         self.recorder.on_update((InputRef(1, A),), "other")
         entry = self.c.entry
         assert entry is not None
-        self.assertEqual(entry.trigger.device, "kbd")
+        self.assertEqual(entry.trigger.device, "other")
 
     def test_recorded_keys_become_one_undo_step(self) -> None:
         self._set_device()
         self.c.start_recording()
-        self.assertEqual(self.recorder.group, "kbd")
+        self.assertIsNone(self.recorder.group)
         self.recorder.on_update((InputRef(1, CTRL),), "kbd")
         self.recorder.on_update((InputRef(1, CTRL), InputRef(1, A)), "kbd")
         entry = self.c.entry
