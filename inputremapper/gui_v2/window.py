@@ -34,7 +34,7 @@ from typing import Any
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk
+from gi.repository import Gdk, GLib, Gtk
 
 from inputremapper.gui_v2.controller import Controller
 from inputremapper.gui_v2.document import Entry
@@ -107,6 +107,7 @@ class Window(Gtk.Window):
         self._entry_rows: dict[str, KeyedRow] = {}
         self._device_keys: tuple[str, ...] = ()
         self.set_default_size(980, 640)
+        self._install_css()
 
         self._build_header()
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -125,6 +126,16 @@ class Window(Gtk.Window):
 
         controller.subscribe(self.schedule_refresh)
         self.refresh()
+
+    @staticmethod
+    def _install_css() -> None:
+        provider = Gtk.CssProvider()
+        provider.load_from_data(b".v2-record image { color: #e01b24; }")
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
 
     # Building ------------------------------------------------------------------
 
@@ -230,7 +241,8 @@ class Window(Gtk.Window):
         when = Gtk.Box(spacing=6)
         self.trigger_entry = Gtk.Entry(placeholder_text="KEY_LEFTCTRL + KEY_A")
         self.trigger_entry.connect("changed", self._on_trigger_changed)
-        self.record_button = Gtk.Button(label="Record")
+        self.record_button = Gtk.Button()
+        self.record_button.get_style_context().add_class("v2-record")
         self.record_button.connect(
             "clicked", lambda *_: self.controller.toggle_recording()
         )
@@ -357,7 +369,19 @@ class Window(Gtk.Window):
         entry = c.entry
         self.form.set_sensitive(entry is not None)
         self._refresh_devices()
-        self.record_button.set_label("Stop" if c.recording else "Record")
+        self.record_button.set_image(
+            Gtk.Image.new_from_icon_name(
+                (
+                    "media-playback-stop-symbolic"
+                    if c.recording
+                    else "media-record-symbolic"
+                ),
+                Gtk.IconSize.BUTTON,
+            )
+        )
+        self.record_button.set_tooltip_text(
+            "Stop recording" if c.recording else "Record keys from the device"
+        )
         if entry is None:
             self._set_text(self.entry_name, "")
             self._set_text(self.trigger_entry, "")
