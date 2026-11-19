@@ -106,6 +106,8 @@ class Window(Gtk.Window):
         self._profile_keys: tuple[str, ...] = ()
         self._entry_rows: dict[str, KeyedRow] = {}
         self._device_keys: tuple[str, ...] = ()
+        self._record_dialog: Gtk.Dialog | None = None
+        self._record_label: Gtk.Label | None = None
         self.set_default_size(980, 640)
         self._install_css()
 
@@ -287,6 +289,7 @@ class Window(Gtk.Window):
             self._refresh_profiles()
             self._refresh_entries()
             self._refresh_form()
+            self._refresh_record_dialog()
         finally:
             self._refreshing = False
 
@@ -395,6 +398,63 @@ class Window(Gtk.Window):
         self._set_buffer(self.then_view, print_chain(entry.then))
         if self.device_combo.get_active_id() != entry.trigger.device:
             self.device_combo.set_active_id(entry.trigger.device)
+
+    def _refresh_record_dialog(self) -> None:
+        """Show a modal while recording. It is also the click surface for mouse
+        buttons: those arrive from the device, not from GTK."""
+        c = self.controller
+        if not c.recording:
+            if self._record_dialog is not None:
+                dialog, self._record_dialog = self._record_dialog, None
+                dialog.destroy()
+            return
+
+        entry = c.entry
+        keys = print_trigger(entry.trigger.inputs) if entry else ""
+        if self._record_dialog is None:
+            self._record_dialog = self._build_record_dialog()
+            self._record_dialog.show_all()
+        if self._record_label is not None:
+            self._set_label(self._record_label, keys or "…")
+
+    def _build_record_dialog(self) -> Gtk.Dialog:
+        dialog = Gtk.Dialog(
+            title="Record keys",
+            transient_for=self,
+            modal=True,
+            use_header_bar=True,
+        )
+        dialog.set_default_size(420, 220)
+        box = dialog.get_content_area()
+        box.set_spacing(12)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{side}")(24)
+
+        title = Gtk.Label(label="Press your key chord now")
+        title.get_style_context().add_class("title-2")
+        hint = Gtk.Label(
+            label="Release all keys to finish.\n"
+            "Mouse buttons count too: click here with the mouse you chose.\n"
+            "To abort, close this dialog."
+        )
+        hint.set_justify(Gtk.Justification.CENTER)
+        self._record_label = Gtk.Label(label="…")
+        self._record_label.get_style_context().add_class("title-3")
+        box.pack_start(title, False, False, 0)
+        box.pack_start(hint, False, False, 0)
+        box.pack_start(self._record_label, True, True, 0)
+
+        dialog.connect("response", self._on_record_dialog_closed)
+        dialog.connect("delete-event", self._on_record_dialog_closed)
+        return dialog
+
+    def _on_record_dialog_closed(self, *_: Any) -> bool:
+        # Only user-initiated closes land here: refresh sets the attribute to None
+        # before it destroys the dialog.
+        if self._record_dialog is not None:
+            self._record_dialog = None
+            self.controller.stop_recording()
+        return False
 
     def _refresh_devices(self) -> None:
         groups = self.controller.groups.get_groups()
