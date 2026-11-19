@@ -45,7 +45,7 @@ run `pyright --pythonpath /usr/bin/python3`, and delete the file again. Note tha
 
 ## Running the beta GUI
 
-`python3 -m inputremapper.bin.input_remapper_beta` (the service must be running, or
+`/usr/bin/python3 -m inputremapper.bin.input_remapper_beta` (system Python, it has `gi`; the service must be running, or
 it offers to start it). `controller.py` holds all behaviour and has no GTK imports;
 `window.py` only displays its state and forwards actions, so add logic there and test
 it in `tests/unit/test_gui_v2/test_controller.py`.
