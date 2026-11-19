@@ -27,15 +27,29 @@ from argparse import ArgumentParser
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import GLib, Gtk
 
+from inputremapper.bin.process_utils import ProcessUtils
 from inputremapper.configs.paths import PathUtils
 from inputremapper.daemon import Daemon
 from inputremapper.groups import _Groups
+from inputremapper.gui.reader_service import ReaderService, ReaderServiceError
 from inputremapper.gui_v2.controller import Controller
+from inputremapper.gui_v2.recorder import Recorder, RecorderError
 from inputremapper.gui_v2.store import default_profiles_dir
 from inputremapper.gui_v2.window import Window
+from inputremapper.ipc.pipe import Pipe
 from inputremapper.logging.logger import logger
+
+
+def ensure_reader_service() -> None:
+    """Start the root helper that reads keys, if it isn't running yet."""
+    if ProcessUtils.count_python_processes("input-remapper-reader-service") >= 1:
+        return
+    try:
+        ReaderService.pkexec_reader_service()
+    except ReaderServiceError as error:
+        raise RecorderError(str(error)) from error
 
 
 def main() -> None:
@@ -46,11 +60,18 @@ def main() -> None:
     logger.log_info("input-remapper beta GUI")
 
     daemon = Daemon.connect()
+
+    # The pipes must be created by this (unprivileged) process before the reader
+    # service starts, otherwise the service owns them and we can't read them.
+    results_path, commands_path = ReaderService.get_pipe_paths()
+    recorder = Recorder(Pipe(results_path), Pipe(commands_path), ensure_reader_service)
+    GLib.timeout_add(30, lambda: recorder.poll() or True)
     controller = Controller(
         daemon,
         _Groups(),
         default_profiles_dir(),
         PathUtils.get_preset_path(),
+        recorder=recorder,
     )
 
     window = Window(controller)

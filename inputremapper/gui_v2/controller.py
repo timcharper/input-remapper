@@ -32,7 +32,8 @@ from pathlib import Path
 from typing import Protocol
 
 from inputremapper.configs.paths import PathUtils
-from inputremapper.gui_v2.document import Entry, Profile, Workspace
+from inputremapper.gui_v2.document import Entry, InputRef, Profile, Workspace
+from inputremapper.gui_v2.recorder import RecorderError
 from inputremapper.gui_v2.render import (
     RenderError,
     import_preset_file,
@@ -50,6 +51,20 @@ class GroupLike(Protocol):
 
 class GroupsLike(Protocol):
     def get_groups(self) -> Sequence[GroupLike]: ...
+
+
+class RecorderLike(Protocol):
+    @property
+    def recording(self) -> bool: ...
+
+    def start(
+        self,
+        group_key: str,
+        on_update: Callable[[tuple[InputRef, ...]], None],
+        on_done: Callable[[], None],
+    ) -> None: ...
+
+    def stop(self) -> None: ...
 
 
 class DaemonLike(Protocol):
@@ -84,7 +99,9 @@ class Controller:
         profiles_dir: Path,
         presets_dir: str | os.PathLike[str] | None = None,
         workspace: Workspace | None = None,
+        recorder: RecorderLike | None = None,
     ) -> None:
+        self.recorder = recorder
         self.daemon = daemon
         self.groups = groups
         self.profiles_dir = profiles_dir
@@ -133,6 +150,10 @@ class Controller:
 
     def subscribe(self, listener: Callable[[], None]) -> None:
         self._listeners.append(listener)
+
+    @property
+    def recording(self) -> bool:
+        return self.recorder is not None and self.recorder.recording
 
     def _changed(self) -> None:
         # Selections may point at things that undo or delete removed.
@@ -202,11 +223,13 @@ class Controller:
         )
 
     def undo(self) -> None:
+        self.stop_recording()
         if self._history.undo():
             self._save()
         self._changed()
 
     def redo(self) -> None:
+        self.stop_recording()
         if self._history.redo():
             self._save()
         self._changed()
@@ -258,6 +281,7 @@ class Controller:
         self._changed()
 
     def select_profile(self, name: str | None) -> None:
+        self.stop_recording()
         self.selected_profile = name
         self.selected_entry = None
         self._changed()
@@ -273,6 +297,8 @@ class Controller:
     # Entries -------------------------------------------------------------------
 
     def select_entry(self, entry_id: str | None) -> None:
+        if entry_id != self.selected_entry:
+            self.stop_recording()
         self.selected_entry = entry_id
         self._changed()
 
@@ -287,6 +313,50 @@ class Controller:
 
     def move_entry(self, entry_id: str, new_index: int) -> None:
         self.edit_profile(lambda p: p.moved_entry(entry_id, new_index))
+
+    # Recording -----------------------------------------------------------------
+
+    def start_recording(self) -> None:
+        """Record the trigger keys of the selected entry from its device."""
+        entry = self.entry
+        if entry is None:
+            return
+        if self.recorder is None:
+            self.message = "Recording is not available"
+        elif entry.trigger.device is None:
+            self.message = "Choose a device first, then record"
+        else:
+            self.message = "Press the keys now, release them all to finish"
+            try:
+                self.recorder.start(
+                    entry.trigger.device, self._recorded, self._recording_done
+                )
+            except RecorderError as error:
+                self.message = str(error)
+        self._changed()
+
+    def stop_recording(self) -> None:
+        if self.recorder is not None and self.recorder.recording:
+            self.recorder.stop()
+            self.message = ""
+            self._changed()
+
+    def toggle_recording(self) -> None:
+        if self.recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def _recorded(self, inputs: tuple[InputRef, ...]) -> None:
+        # Each key added to the combination coalesces into one undo step.
+        self.edit_entry(
+            lambda e: replace(e, trigger=replace(e.trigger, inputs=inputs)),
+            merge_key="record",
+        )
+
+    def _recording_done(self) -> None:
+        self.message = ""
+        self._changed()
 
     # Import --------------------------------------------------------------------
 

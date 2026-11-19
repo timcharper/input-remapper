@@ -6,7 +6,9 @@ sketches: https://claude.ai/artifact/C3tBp3f8xrta4TLMp3QuLw
 Rules that were decided on purpose:
 
 - **Independent of `inputremapper/gui`.** It may import the daemon, `Preset`,
-  `Mapping` and config paths, and nothing from the old GUI package. It is launched
+  `Mapping` and config paths, and nothing from the old GUI package. The one exception
+  is `inputremapper.gui.reader_service`, the root helper that reads keys; `recorder.py`
+  uses its pipe protocol. It is launched
   separately, from source.
 - **A profile is the set of presets with the same name across devices.** The daemon
   only takes `(group_key, preset_name)` and reads the preset file itself, so nothing
@@ -50,8 +52,10 @@ it offers to start it). `controller.py` holds all behaviour and has no GTK impor
 `window.py` only displays its state and forwards actions, so add logic there and test
 it in `tests/unit/test_gui_v2/test_controller.py`.
 
-Known stand-ins: the trigger is typed as key names (`trigger_text.py`) until recording
-from a device exists, and "Then" is the macro text until the block editor is built.
+Keys are recorded from the entry's device via the reader service (Record button, needs
+a device chosen first; it starts the service with pkexec on first use). The typed key
+names (`trigger_text.py`) stay as a fallback. Only keys and buttons are recorded, no
+axes. Known stand-in: "Then" is the macro text until the block editor is built.
 
 ## Window conventions
 

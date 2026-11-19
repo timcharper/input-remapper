@@ -230,9 +230,14 @@ class Window(Gtk.Window):
         when = Gtk.Box(spacing=6)
         self.trigger_entry = Gtk.Entry(placeholder_text="KEY_LEFTCTRL + KEY_A")
         self.trigger_entry.connect("changed", self._on_trigger_changed)
+        self.record_button = Gtk.Button(label="Record")
+        self.record_button.connect(
+            "clicked", lambda *_: self.controller.toggle_recording()
+        )
         self.device_combo = Gtk.ComboBoxText()
         self.device_combo.connect("changed", self._on_device_changed)
         when.pack_start(self.trigger_entry, True, True, 0)
+        when.pack_start(self.record_button, False, False, 0)
         when.pack_start(Gtk.Label(label="is pressed on"), False, False, 0)
         when.pack_start(self.device_combo, False, False, 0)
         row(1, "When", when)
@@ -352,6 +357,7 @@ class Window(Gtk.Window):
         entry = c.entry
         self.form.set_sensitive(entry is not None)
         self._refresh_devices()
+        self.record_button.set_label("Stop" if c.recording else "Record")
         if entry is None:
             self._set_text(self.entry_name, "")
             self._set_text(self.trigger_entry, "")

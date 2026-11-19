@@ -33,7 +33,7 @@ from inputremapper.gui_v2.document import InputRef
 _BY_NAME: dict[str, int] = {
     name: code
     for name, code in ecodes.ecodes.items()
-    if isinstance(name, str) and name.startswith(("KEY_", "BTN_"))
+    if name.startswith(("KEY_", "BTN_"))
 }
 
 
