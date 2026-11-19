@@ -83,8 +83,31 @@ def entry_to_mapping(entry: Entry) -> dict[str, Any]:
     if entry.then:
         mapping["output_symbol"] = print_chain(entry.then)
     mapping.update(entry.v1_extra)
-    _check_mapping(mapping, entry.id)
+    _check_with_fitting_target(mapping, entry.id)
     return mapping
+
+
+# v2 has no target setting. The one the entry came with is tried first, then these.
+_FALLBACK_TARGETS = ("keyboard", "mouse", "keyboard + mouse")
+
+
+def _check_with_fitting_target(mapping: dict[str, Any], entry_id: str) -> None:
+    """Validate the mapping, switching the target device to one that can produce
+    all of its keys (keys and mouse buttons together need "keyboard + mouse")."""
+    try:
+        _check_mapping(mapping, entry_id)
+        return
+    except RenderError:
+        for target in _FALLBACK_TARGETS:
+            if target == mapping["target_uinput"]:
+                continue
+            try:
+                _check_mapping({**mapping, "target_uinput": target}, entry_id)
+            except RenderError:
+                continue
+            mapping["target_uinput"] = target
+            return
+        raise
 
 
 def _check_mapping(mapping: dict[str, Any], entry_id: str) -> None:

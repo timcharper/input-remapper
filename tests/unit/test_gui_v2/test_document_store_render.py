@@ -145,9 +145,13 @@ class TestRender(unittest.TestCase):
         self.assertIn("time", str(bad_time.exception))
         self.assertIsNotNone(bad_time.exception.entry_id)
 
-        with self.assertRaises(RenderError) as bad_target:
-            render_profile(Profile("p", (entry("key(B)", "mouse"),)))
-        self.assertIn("not available", str(bad_target.exception))
+        # The target device follows the keys used.
+        rendered = render_profile(Profile("p", (entry("key(B)", "mouse"),)))
+        self.assertEqual(rendered["kbd"][0]["target_uinput"], "keyboard")
+        rendered = render_profile(Profile("p", (entry("key(BTN_LEFT)"),)))
+        self.assertEqual(rendered["kbd"][0]["target_uinput"], "mouse")
+        rendered = render_profile(Profile("p", (entry("key(a).key(BTN_LEFT)"),)))
+        self.assertEqual(rendered["kbd"][0]["target_uinput"], "keyboard + mouse")
 
         render_profile(Profile("p", (entry("key(a)"),)))
 
