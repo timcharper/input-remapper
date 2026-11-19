@@ -17,17 +17,24 @@
 # along with input-remapper.  If not, see <https://www.gnu.org/licenses/>.
 
 
-"""The GTK window of the beta GUI. Only displays the controller's state."""
+"""The GTK window of the beta GUI. Only displays the controller's state.
+
+Widgets are created once and updated in place, like a keyed virtual DOM: lists add,
+remove and reorder rows by key, and text fields are only written to when their value
+differs and they aren't being typed in. Refreshes run from an idle callback, never
+inside a signal handler, so a handler never destroys the widget that is emitting.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import GLib, Gtk
 
 from inputremapper.gui_v2.controller import Controller
 from inputremapper.gui_v2.document import Entry
@@ -51,11 +58,53 @@ def entry_title(entry: Entry) -> str:
     return keys or "New entry"
 
 
+class KeyedRow(Gtk.ListBoxRow):
+    """A list row that remembers which item it shows."""
+
+    def __init__(self, key: str, label: Gtk.Label, *extra: Gtk.Widget) -> None:
+        super().__init__()
+        self.key = key
+        self.label = label
+        box = Gtk.Box(spacing=4)
+        label.set_margin_top(4)
+        label.set_margin_bottom(4)
+        label.set_margin_start(4)
+        label.set_ellipsize(3)  # Pango.EllipsizeMode.END
+        box.pack_start(label, True, True, 0)
+        for widget in extra:
+            box.pack_end(widget, False, False, 0)
+        self.add(box)
+        self.show_all()
+
+
+def sync_rows(
+    listbox: Gtk.ListBox,
+    rows: dict[str, KeyedRow],
+    keys: Sequence[str],
+    make: Callable[[str], KeyedRow],
+) -> None:
+    """Make the list show exactly `keys`, in order, reusing existing rows."""
+    for key in [k for k in rows if k not in keys]:
+        listbox.remove(rows.pop(key))
+    for index, key in enumerate(keys):
+        row = rows.get(key)
+        if row is None:
+            row = rows[key] = make(key)
+            listbox.insert(row, index)
+        elif listbox.get_row_at_index(index) is not row:
+            listbox.remove(row)
+            listbox.insert(row, index)
+
+
 class Window(Gtk.Window):
     def __init__(self, controller: Controller) -> None:
         super().__init__(title="Input Remapper (beta)")
         self.controller = controller
         self._refreshing = False
+        self._refresh_scheduled = False
+        self._profile_rows: dict[str, KeyedRow] = {}
+        self._entry_rows: dict[str, KeyedRow] = {}
+        self._device_keys: tuple[str, ...] = ()
         self.set_default_size(980, 640)
 
         self._build_header()
@@ -72,7 +121,7 @@ class Window(Gtk.Window):
         outer.pack_start(self.status, False, False, 0)
         self.add(outer)
 
-        controller.subscribe(self.refresh)
+        controller.subscribe(self.schedule_refresh)
         self.refresh()
 
     # Building ------------------------------------------------------------------
@@ -195,14 +244,20 @@ class Window(Gtk.Window):
         self.entry_error = Gtk.Label(xalign=0)
         self.entry_error.get_style_context().add_class("error")
         self.form.attach(self.entry_error, 1, 3, 1, 1)
-
-        delete = Gtk.Button(label="Delete entry")
-        delete.connect("clicked", self._on_delete_entry)
-        delete.set_halign(Gtk.Align.END)
-        self.form.attach(delete, 1, 4, 1, 1)
         return self.form
 
     # Refreshing ----------------------------------------------------------------
+
+    def schedule_refresh(self) -> None:
+        """Refresh once the current event is handled. Several requests become one."""
+        if not self._refresh_scheduled:
+            self._refresh_scheduled = True
+            GLib.idle_add(self._run_scheduled_refresh)
+
+    def _run_scheduled_refresh(self) -> bool:
+        self._refresh_scheduled = False
+        self.refresh()
+        return False
 
     def refresh(self) -> None:
         self._refreshing = True
@@ -221,23 +276,19 @@ class Window(Gtk.Window):
 
     def _refresh_profiles(self) -> None:
         c = self.controller
-        for child in self.profile_list.get_children():
-            self.profile_list.remove(child)
-        for profile in c.workspace.profiles:
-            running = profile.name == c.active_profile
-            label = Gtk.Label(
-                label=f"{ACTIVE_MARK} {profile.name}" if running else profile.name,
-                xalign=0,
-            )
-            label.set_margin_top(4)
-            label.set_margin_bottom(4)
-            row = Gtk.ListBoxRow()
-            row.profile_name = profile.name  # pyright: ignore
-            row.add(label)
-            self.profile_list.add(row)
-            if profile.name == c.selected_profile:
-                self.profile_list.select_row(row)
-        self.profile_list.show_all()
+        names = [p.name for p in c.workspace.profiles]
+        sync_rows(
+            self.profile_list,
+            self._profile_rows,
+            names,
+            lambda name: KeyedRow(name, Gtk.Label(xalign=0)),
+        )
+        for name, row in self._profile_rows.items():
+            mark = f"{ACTIVE_MARK} " if name == c.active_profile else ""
+            self._set_label(row.label, f"{mark}{name}")
+        self._select(
+            self.profile_list, self._profile_rows.get(c.selected_profile or "")
+        )
 
         selected_running = (
             c.selected_profile is not None and c.selected_profile == c.active_profile
@@ -245,84 +296,103 @@ class Window(Gtk.Window):
         self.apply_button.set_label("Stop" if selected_running else "Apply")
         self.apply_button.set_sensitive(c.profile is not None)
 
+    def _make_entry_row(self, entry_id: str) -> KeyedRow:
+        delete = Gtk.Button.new_from_icon_name(
+            "window-close-symbolic", Gtk.IconSize.MENU
+        )
+        delete.set_relief(Gtk.ReliefStyle.NONE)
+        delete.set_tooltip_text("Delete this entry")
+        delete.connect("clicked", lambda *_: self.controller.delete_entry(entry_id))
+        return KeyedRow(entry_id, Gtk.Label(xalign=0), delete)
+
     def _refresh_entries(self) -> None:
         c = self.controller
-        for child in self.entry_list.get_children():
-            self.entry_list.remove(child)
         profile = c.profile
-        if profile is not None:
-            for entry in profile.entries:
-                label = Gtk.Label(label=entry_title(entry), xalign=0)
-                label.set_margin_top(4)
-                label.set_margin_bottom(4)
-                row = Gtk.ListBoxRow()
-                row.entry_id = entry.id  # pyright: ignore
-                row.add(label)
-                self.entry_list.add(row)
-                if entry.id == c.selected_entry:
-                    self.entry_list.select_row(row)
-        self.entry_list.show_all()
+        entries = profile.entries if profile is not None else ()
+        sync_rows(
+            self.entry_list,
+            self._entry_rows,
+            [e.id for e in entries],
+            self._make_entry_row,
+        )
+        for entry in entries:
+            self._set_label(self._entry_rows[entry.id].label, entry_title(entry))
+        self._select(self.entry_list, self._entry_rows.get(c.selected_entry or ""))
 
     def _refresh_form(self) -> None:
         c = self.controller
         profile = c.profile
-        name = profile.name if profile else ""
-        if not self.profile_name.has_focus() or self.profile_name.get_text() == name:
-            self.profile_name.set_text(name)
+        self._set_text(self.profile_name, profile.name if profile else "")
         self.profile_name.set_sensitive(profile is not None)
 
         entry = c.entry
         self.form.set_sensitive(entry is not None)
+        self._refresh_devices()
         if entry is None:
-            self.entry_name.set_text("")
-            self.trigger_entry.set_text("")
-            self.then_view.get_buffer().set_text("")
+            self._set_text(self.entry_name, "")
+            self._set_text(self.trigger_entry, "")
+            self._set_buffer(self.then_view, "")
             self.entry_error.set_text("")
+            self.device_combo.set_active(-1)
             return
 
         self._set_text(self.entry_name, entry.name or "")
-        shown = print_trigger(entry.trigger.inputs)
-        if not self.trigger_entry.has_focus():
-            self._set_text(self.trigger_entry, shown)
-        self._refresh_devices(entry)
-        buffer = self.then_view.get_buffer()
-        text = print_chain(entry.then)
-        if not self.then_view.has_focus() and self._buffer_text(buffer) != text:
-            buffer.set_text(text)
+        self._set_text(self.trigger_entry, print_trigger(entry.trigger.inputs))
+        self._set_buffer(self.then_view, print_chain(entry.then))
+        if self.device_combo.get_active_id() != entry.trigger.device:
+            self.device_combo.set_active_id(entry.trigger.device)
 
-    def _refresh_devices(self, entry: Entry) -> None:
-        combo = self.device_combo
-        combo.remove_all()
-        selected = -1
-        for index, group in enumerate(self.controller.groups.get_groups()):
-            combo.append(group.key, group.name)
-            if group.key == entry.trigger.device:
-                selected = index
-        if selected >= 0:
-            combo.set_active(selected)
-        else:
-            combo.set_active(-1)
+    def _refresh_devices(self) -> None:
+        groups = self.controller.groups.get_groups()
+        keys = tuple(g.key for g in groups)
+        if keys == self._device_keys:
+            return
+        self._device_keys = keys
+        self.device_combo.remove_all()
+        for group in groups:
+            self.device_combo.append(group.key, group.name)
+
+    # In-place update helpers. Never touch a widget whose value is already right,
+    # or that the user is typing in.
+
+    @staticmethod
+    def _set_label(label: Gtk.Label, text: str) -> None:
+        if label.get_text() != text:
+            label.set_text(text)
+
+    @staticmethod
+    def _select(listbox: Gtk.ListBox, row: KeyedRow | None) -> None:
+        if row is None:
+            if listbox.get_selected_row() is not None:
+                listbox.unselect_all()
+        elif listbox.get_selected_row() is not row:
+            listbox.select_row(row)
 
     @staticmethod
     def _set_text(widget: Gtk.Entry, text: str) -> None:
-        if widget.get_text() != text:
+        if widget.get_text() != text and not widget.has_focus():
             widget.set_text(text)
 
     @staticmethod
     def _buffer_text(buffer: Gtk.TextBuffer) -> str:
         return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
 
+    def _set_buffer(self, view: Gtk.TextView, text: str) -> None:
+        buffer = view.get_buffer()
+        if self._buffer_text(buffer) != text and not view.has_focus():
+            buffer.set_text(text)
+
     # Handlers ------------------------------------------------------------------
 
     def _on_profile_selected(self, _list: Gtk.ListBox, row: Any) -> None:
         if self._refreshing or row is None:
             return
-        self.controller.select_profile(row.profile_name)
+        self.controller.select_profile(row.key)
 
     def _on_entry_selected(self, _list: Gtk.ListBox, row: Any) -> None:
         if self._refreshing:
             return
-        self.controller.select_entry(row.entry_id if row is not None else None)
+        self.controller.select_entry(row.key if row is not None else None)
 
     def _on_profile_renamed(self, *_: Any) -> bool:
         if not self._refreshing:
@@ -369,10 +439,6 @@ class Window(Gtk.Window):
             return
         self.entry_error.set_text("")
         self.controller.edit_entry(lambda e: replace(e, then=chain), merge_key="then")
-
-    def _on_delete_entry(self, *_: Any) -> None:
-        if self.controller.selected_entry:
-            self.controller.delete_entry(self.controller.selected_entry)
 
     def _populate_add_menu(self, button: Gtk.MenuButton) -> None:
         menu = Gtk.Menu()
