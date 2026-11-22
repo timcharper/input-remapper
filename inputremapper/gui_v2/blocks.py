@@ -915,7 +915,22 @@ class BlockEditor(Gtk.ScrolledWindow):
                 self._add_variable(name)
             return False
 
+        def highlight_current(widget: Gtk.ComboBox, _pspec: Any) -> None:
+            # Open on the variable the field holds, not on the first row.
+            if not widget.get_property("popup-shown"):
+                return
+            text = entry.get_text()
+            for row in choices:
+                if row[0] == text and widget.get_active() != row.path[0]:
+                    was_updating, self._updating = self._updating, True
+                    try:
+                        widget.set_active(row.path[0])
+                    finally:
+                        self._updating = was_updating
+                    return
+
         combo.connect("changed", chosen)
+        combo.connect("notify::popup-shown", highlight_current)
         entry.connect("activate", declare)
         entry.connect("focus-out-event", declare)
         return combo
