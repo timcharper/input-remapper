@@ -30,6 +30,12 @@ Rules that were decided on purpose:
 - **The document is immutable.** Edits create a new `Workspace`, and undo/redo is a
   linear stack of snapshots (`undo.py`) with no command objects. Typing coalesces via
   `merge_key`.
+- **Entries have no output device.** Key and macro outputs are rendered with the
+  engine target `auto` (`AUTO_UINPUT`): every key goes to the keyboard and every mouse
+  button to the mouse, so a held button is released through the device that pressed
+  it. Needs a daemon that knows `auto`. The keyboard + mouse device is not used by v2.
+  Other (analog, imported) outputs take the first of keyboard, mouse, gamepad that
+  fits.
 - Variables are only declared names. The engine has one global variable store and no
   initial values.
 - Autoload is not supported yet. A hotplug autoload of a v1 preset can replace a

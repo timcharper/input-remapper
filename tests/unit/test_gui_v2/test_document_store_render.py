@@ -133,11 +133,10 @@ class TestRender(unittest.TestCase):
             self.assertFalse((Path(tmp) / "gone").exists())
 
     def test_apply_reports_what_the_service_would_reject(self):
-        def entry(code: str, target: str = "keyboard") -> Entry:
+        def entry(code: str) -> Entry:
             return Entry(
                 trigger=Trigger(inputs=(InputRef(EV_KEY, KEY_F4),), device="kbd"),
                 then=parse_text(code),
-                target=target,
             )
 
         with self.assertRaises(RenderError) as bad_time:
@@ -145,13 +144,10 @@ class TestRender(unittest.TestCase):
         self.assertIn("time", str(bad_time.exception))
         self.assertIsNotNone(bad_time.exception.entry_id)
 
-        # The target device follows the keys used.
-        rendered = render_profile(Profile("p", (entry("key(B)", "mouse"),)))
-        self.assertEqual(rendered["kbd"][0]["target_uinput"], "keyboard")
-        rendered = render_profile(Profile("p", (entry("key(BTN_LEFT)"),)))
-        self.assertEqual(rendered["kbd"][0]["target_uinput"], "mouse")
-        rendered = render_profile(Profile("p", (entry("key(a).key(BTN_LEFT)"),)))
-        self.assertEqual(rendered["kbd"][0]["target_uinput"], "keyboard + mouse")
+        # The engine picks the device per key, also when keys and buttons mix.
+        for code in ("key(B)", "key(BTN_LEFT)", "key(a).key_down(BTN_LEFT)"):
+            rendered = render_profile(Profile("p", (entry(code),)))
+            self.assertEqual(rendered["kbd"][0]["target_uinput"], "auto")
 
         render_profile(Profile("p", (entry("key(a)"),)))
 
@@ -186,11 +182,11 @@ class TestRender(unittest.TestCase):
             {
                 "input_combination": [{"type": 1, "code": 31}, {"type": 1, "code": 32}],
                 "target_uinput": "keyboard + mouse",
-                "output_symbol": "key(a).brand_new_task(1).wait(5)",
+                "output_symbol": "key(a).wait(5)",
                 "macro_key_sleep_ms": 20,
             },
             {
-                "input_combination": [{"type": 3, "code": 0, "analog_threshold": 50}],
+                "input_combination": [{"type": 3, "code": 0}],
                 "target_uinput": "gamepad",
                 "output_type": 3,
                 "output_code": 1,
@@ -207,6 +203,10 @@ class TestRender(unittest.TestCase):
         rendered = render_profile(Profile("p", tuple(entries)))["kbd"]
         # A plain key output is upgraded to the equivalent macro.
         original[0]["output_symbol"] = "hold_keys(KEY_B)"
+        # v2 has no output device: key outputs go through "auto", and an analog one
+        # takes the device that fits it.
+        original[0]["target_uinput"] = "auto"
+        original[1]["target_uinput"] = "auto"
         for before, after in zip(original, rendered):
             self.assertEqual(before, after)
 

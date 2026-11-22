@@ -31,6 +31,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from evdev.ecodes import EV_ABS, EV_KEY, EV_REL
+
 from inputremapper.configs.mapping import Mapping
 from inputremapper.configs.paths import PathUtils
 from inputremapper.gui_v2.block_ops import first_gap
@@ -41,6 +43,7 @@ from inputremapper.gui_v2.macro_text import (
     print_chain,
 )
 from inputremapper.gui_v2.tree import Call
+from inputremapper.injection.global_uinputs import AUTO_UINPUT, GlobalUInputs
 
 RENDERED_PREFIX = "[v2 read-only] "
 
@@ -76,19 +79,37 @@ def entry_to_mapping(entry: Entry) -> dict[str, Any]:
 
     mapping: dict[str, Any] = {
         "input_combination": [i.to_json() for i in entry.trigger.inputs],
-        "target_uinput": entry.target,
+        "target_uinput": AUTO_UINPUT,
     }
     if entry.name:
         mapping["name"] = entry.name
     if entry.then:
         mapping["output_symbol"] = print_chain(entry.then)
     mapping.update(entry.v1_extra)
+    if not entry.then:
+        mapping["target_uinput"] = _device_for_output(mapping)
     _check_with_fitting_target(mapping, entry.id)
     return mapping
 
 
-# v2 has no target setting. The one the entry came with is tried first, then these.
-_FALLBACK_TARGETS = ("keyboard", "mouse", "keyboard + mouse")
+# v2 has no output device setting. Key and macro outputs use "auto": the engine sends
+# each key to the keyboard and each mouse button to the mouse. Other outputs (analog
+# ones, imported from v1) use the first of these that can produce them.
+_OUTPUT_DEVICES = ("keyboard", "mouse", "gamepad")
+
+
+def _device_for_output(mapping: dict[str, Any]) -> str:
+    """The device for an output that isn't a macro, like an analog axis."""
+    type_, code = mapping.get("output_type"), mapping.get("output_code")
+    if type_ == EV_ABS:
+        return "gamepad"
+    if type_ == EV_REL:
+        return "mouse"
+    if type_ == EV_KEY and code is not None:
+        for device in GlobalUInputs.find_fitting_default_uinputs(type_, code):
+            if device in _OUTPUT_DEVICES:
+                return device
+    return _OUTPUT_DEVICES[0]
 
 
 def _check_with_fitting_target(mapping: dict[str, Any], entry_id: str) -> None:
@@ -98,7 +119,7 @@ def _check_with_fitting_target(mapping: dict[str, Any], entry_id: str) -> None:
         _check_mapping(mapping, entry_id)
         return
     except RenderError:
-        for target in _FALLBACK_TARGETS:
+        for target in _OUTPUT_DEVICES:
             if target == mapping["target_uinput"]:
                 continue
             try:
@@ -194,7 +215,6 @@ def entry_from_mapping(mapping: dict[str, Any], device: str | None) -> Entry:
         name=mapping.get("name"),
         trigger=Trigger(inputs=inputs, device=device),
         then=then,
-        target=mapping.get("target_uinput") or "keyboard",
         v1_extra={k: v for k, v in mapping.items() if k not in _HANDLED_FIELDS},
     )
 

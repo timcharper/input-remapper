@@ -98,7 +98,6 @@ class Entry:
     name: str | None = None
     trigger: Trigger = Trigger()
     then: Chain = ()
-    target: str = "keyboard"
     # v1 mapping fields the editor doesn't expose (deadzone, release_timeout, ...).
     # Carried through unchanged. Treat as read-only; copy before modifying.
     v1_extra: dict[str, Any] = field(default_factory=dict[str, Any])
@@ -109,7 +108,6 @@ class Entry:
             "name": self.name,
             "when": self.trigger.to_json(),
             "then": chain_to_json(self.then),
-            "target": self.target,
         }
         if self.v1_extra:
             out["v1_extra"] = self.v1_extra
@@ -122,7 +120,6 @@ class Entry:
             name=data.get("name"),
             trigger=Trigger.from_json(data.get("when", {})),
             then=chain_from_json(data.get("then", [])),
-            target=data.get("target", "keyboard"),
             v1_extra=dict(data.get("v1_extra", {})),
         )
 
