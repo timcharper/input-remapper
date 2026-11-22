@@ -211,6 +211,16 @@ class TestController(unittest.TestCase):
         self.assertIsNone(self.controller.active_profile)
         self.assertFalse(self.controller.can_record)
 
+    def test_add_variable_declares_it_once(self) -> None:
+        self._profile_with_entry()
+        self.controller.add_variable("$count")
+        self.controller.add_variable("count")
+        self.controller.add_variable("not valid")
+        self.controller.add_variable("")
+        profile = self.controller.profile
+        assert profile is not None
+        self.assertEqual(profile.variables, ("count",))
+
     def test_toggle_stops_the_active_profile(self) -> None:
         self._profile_with_entry()
         self.controller.toggle_apply()

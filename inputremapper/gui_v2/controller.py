@@ -26,6 +26,7 @@ action testable, and routes all edits through one place, so undo covers all of t
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Collection, Hashable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -98,6 +99,7 @@ def unique_name(base: str, taken: Collection[str]) -> str:
     return f"{base} {number}"
 
 
+VARIABLE_NAME = re.compile(r"^[A-Za-z_]\w*$")
 RECORD_BLOCKED_MESSAGE = "Stop the running profile to record input"
 
 
@@ -387,6 +389,15 @@ class Controller:
             if name and name not in cleaned:
                 cleaned.append(name)
         self.edit_profile(lambda p: replace(p, variables=tuple(cleaned)))
+
+    def add_variable(self, name: str) -> None:
+        """Declare a variable (a leading `$` is fine) unless it already is."""
+        name = name.strip().lstrip("$")
+        profile = self.profile
+        if profile is None or not VARIABLE_NAME.match(name):
+            return
+        if name not in profile.variables:
+            self.set_variables([*profile.variables, name])
 
     # Entries -------------------------------------------------------------------
 

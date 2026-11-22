@@ -318,6 +318,39 @@ def _contains(
     return model is not None and key.lower() in str(model[row][0]).lower()
 
 
+# The last row of a variable drop-down. Choosing it lets the user type a new name.
+ADD_VARIABLE_LABEL = "＋ Add new variable…"
+_VARIABLE_NAME = re.compile(r"^[A-Za-z_]\w*$")
+# Functions whose plain values are either a literal or a $variable.
+_VARIABLE_VALUE_OPS = ("if_eq", "while_eq")
+
+
+def _picks_variable(op: str, arg: ArgSpec) -> bool:
+    """Whether the argument is chosen from the profile's variables."""
+    if arg.kind is ArgKind.VARIABLE:
+        return True
+    return arg.kind is ArgKind.VALUE and op in _VARIABLE_VALUE_OPS
+
+
+def _style_variable_tag(entry: Gtk.Entry, arg: ArgSpec) -> None:
+    """Draw the field as a tag while it holds a variable, plain while it holds a
+    literal (only possible where a value may be either)."""
+
+    def update(*_: Any) -> None:
+        text = entry.get_text()
+        is_variable = bool(text) and (
+            arg.kind is ArgKind.VARIABLE or re.match(r"^\$\w+$", text) is not None
+        )
+        context = entry.get_style_context()
+        if is_variable:
+            context.add_class("v2-variable-tag")
+        else:
+            context.remove_class("v2-variable-tag")
+
+    entry.connect("changed", update)
+    update()
+
+
 # A number, or a variable like $name that stands for one.
 _NUMBER_OR_VARIABLE = re.compile(r"^(-?\d*\.?\d*|\$\w*)$")
 
@@ -376,6 +409,7 @@ class _Block:
     def __init__(self) -> None:
         self.frame: Gtk.Widget | None = None
         self.title: Gtk.Label | None = None
+        self.op = ""
         self.fields: list[_Field] = []
         self.slots: list[tuple[int, _Stack]] = []
 
@@ -434,10 +468,12 @@ class BlockEditor(Gtk.ScrolledWindow):
         self,
         on_change: Callable[[Chain, bool], None],
         variables: Callable[[], Iterable[str]] = lambda: (),
+        add_variable: Callable[[str], None] = lambda _name: None,
     ) -> None:
         super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER)
         self._on_change = on_change
         self._variables = variables
+        self._add_variable = add_variable
         self._base: Chain = ()
         self._updating = False
         self._rendered: Chain | None = None
@@ -449,7 +485,11 @@ class BlockEditor(Gtk.ScrolledWindow):
         self._typed_names = Gtk.ListStore(str)
         for name in _typed_names():
             self._typed_names.append([name])
+        # Completion wants the bare names; the pickers also have the "add" row, and
+        # the value pickers list them as $name.
         self._variable_names = Gtk.ListStore(str)
+        self._variable_choices = Gtk.ListStore(str)
+        self._variable_ref_choices = Gtk.ListStore(str)
 
         self.get_style_context().add_class("v2-blocks")
         self._root.box.set_margin_start(8)
@@ -460,13 +500,29 @@ class BlockEditor(Gtk.ScrolledWindow):
 
     # Showing -------------------------------------------------------------------
 
+    def _refresh_variables(self) -> None:
+        names = list(self._variables())
+        for store, make in (
+            (self._variable_names, lambda n: [n]),
+            (self._variable_choices, lambda n: [n]),
+            (self._variable_ref_choices, lambda n: [f"${n}"]),
+        ):
+            if [row[0] for row in store if row[0] != ADD_VARIABLE_LABEL] == [
+                make(n)[0] for n in names
+            ]:
+                continue
+            store.clear()
+            for name in names:
+                store.append(make(name))
+        for store in (self._variable_choices, self._variable_ref_choices):
+            if not len(store) or store[len(store) - 1][0] != ADD_VARIABLE_LABEL:
+                store.append([ADD_VARIABLE_LABEL])
+
     def set_chain(self, chain: Chain) -> None:
         self._base = chain
+        self._refresh_variables()
         if chain == self._rendered:
             return
-        self._variable_names.clear()
-        for name in self._variables():
-            self._variable_names.append([name])
 
         # Writing into the fields must not look like the user editing them.
         self._updating = True
@@ -634,6 +690,7 @@ class BlockEditor(Gtk.ScrolledWindow):
         self, path: ChainPath, index: int, call: Call
     ) -> tuple[_Block, Gtk.Widget]:
         block = _Block()
+        block.op = call.op
         spec = SCHEMA.get(call.op)
         color = CATEGORY_COLORS.get(call.op, "#8a8a8a")
 
@@ -792,14 +849,19 @@ class BlockEditor(Gtk.ScrolledWindow):
             entry.set_completion(self._completion(names))
             widget = combo
             _key_entry_behavior(entry, combo, names, needle, shown)
+        elif _picks_variable(block.op, arg):
+            combo = self._variable_picker(arg)
+            entry = combo.get_child()
+            assert isinstance(entry, Gtk.Entry)
+            widget = combo
         else:
             entry = Gtk.Entry(width_chars=6)
             widget = entry
-            if arg.kind is ArgKind.VARIABLE:
-                entry.set_completion(self._completion(self._variable_names))
-            elif _is_numeric(arg):
+            if _is_numeric(arg):
                 entry.connect("insert-text", _only_numbers)
         entry.get_style_context().add_class("v2-field")
+        if _picks_variable(block.op, arg):
+            _style_variable_tag(entry, arg)
         header.pack_start(widget, False, False, 0)
         if arg.unit:
             unit = Gtk.Label(label=arg.unit)
@@ -810,6 +872,8 @@ class BlockEditor(Gtk.ScrolledWindow):
             if self._updating:
                 return
             text = widget.get_text()
+            if text == ADD_VARIABLE_LABEL:
+                return  # The "add" row was chosen; the picker clears the field.
             if arg.kind is ArgKind.SYMBOL and text and not _is_valid_key(text):
                 return  # Half typed; it is only stored once it names a key.
             value = parse_arg(canonical_key(text) if text else text, arg)
@@ -817,6 +881,44 @@ class BlockEditor(Gtk.ScrolledWindow):
 
         entry.connect("changed", changed)
         block.fields.append(_Field(entry, arg_index, arg))
+
+    def _variable_picker(self, arg: ArgSpec) -> Gtk.ComboBox:
+        """A drop-down of the declared variables. The last row, "add new", empties
+        the field for typing; the name is declared once the field is left."""
+        is_reference = arg.kind is not ArgKind.VARIABLE
+        choices = self._variable_ref_choices if is_reference else self._variable_choices
+        combo = Gtk.ComboBox.new_with_model_and_entry(choices)
+        combo.set_entry_text_column(0)
+        entry = combo.get_child()
+        assert isinstance(entry, Gtk.Entry)
+        entry.set_width_chars(10)
+        entry.set_completion(self._completion(self._variable_names))
+
+        def chosen(widget: Gtk.ComboBox) -> None:
+            row = widget.get_active_iter()
+            if row is None or choices[row][0] != ADD_VARIABLE_LABEL:
+                return
+
+            def start_typing() -> bool:
+                # A value field keeps its $, so the name can't be taken for a literal.
+                entry.set_text("$" if is_reference else "")
+                entry.grab_focus()
+                entry.set_position(-1)
+                return False
+
+            GLib.idle_add(start_typing)
+
+        def declare(*_: Any) -> bool:
+            name = entry.get_text().lstrip("$") if is_reference else entry.get_text()
+            wanted = entry.get_text().startswith("$") or not is_reference
+            if wanted and _VARIABLE_NAME.match(name) and name not in self._variables():
+                self._add_variable(name)
+            return False
+
+        combo.connect("changed", chosen)
+        entry.connect("activate", declare)
+        entry.connect("focus-out-event", declare)
+        return combo
 
     @staticmethod
     def _completion(model: Gtk.ListStore) -> Gtk.EntryCompletion:
@@ -872,6 +974,9 @@ _BASE_CSS = """
     border-left: 3px solid alpha(currentColor, 0.2); }
 .v2-gap { min-height: 6px; border-radius: 3px; background: transparent; }
 .v2-gap-hot { min-height: 22px; background-color: alpha(#4c97ff, 0.35); }
+.v2-variable-tag { border: 1px solid #9966ff; border-radius: 12px;
+    background-image: none; background-color: alpha(#9966ff, 0.22);
+    padding-left: 10px; padding-right: 10px; font-weight: bold; }
 .v2-handle { opacity: 0.55; }
 .v2-handle:hover { opacity: 1; }
 .v2-palette-item { padding: 4px 10px; border-left: 4px solid #8a8a8a;

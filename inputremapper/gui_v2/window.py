@@ -281,31 +281,27 @@ class Window(Gtk.Window):
         self.then_view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
         self.then_view.set_monospace(True)
         self.then_view.get_buffer().connect("changed", self._on_then_changed)
-        text_frame = Gtk.ScrolledWindow(shadow_type=Gtk.ShadowType.IN)
+        text_frame = Gtk.ScrolledWindow(shadow_type=Gtk.ShadowType.NONE)
         text_frame.add(self.then_view)
 
-        # Blocks by default, the macro text as an escape hatch.
+        # Blocks by default, the macro text on the second tab.
         self.block_editor = BlockEditor(
-            self._on_blocks_changed, lambda: self._current_variables()
+            self._on_blocks_changed,
+            lambda: self._current_variables(),
+            lambda name: self.controller.add_variable(name),
         )
-        block_frame = Gtk.Frame(shadow_type=Gtk.ShadowType.IN)
-        block_frame.add(self.block_editor)
-        self.then_stack = Gtk.Stack()
-        self.then_stack.add_named(block_frame, "blocks")
-        self.then_stack.add_named(text_frame, "text")
-        self.then_stack.set_vexpand(True)
-        self.then_stack.set_hexpand(True)
-        self.then_stack.show_all()
+        self.then_tabs = Gtk.Notebook()
+        self.then_tabs.append_page(self.block_editor, Gtk.Label(label="Block Editor"))
+        self.then_tabs.append_page(text_frame, Gtk.Label(label="Code"))
+        self.then_tabs.set_vexpand(True)
+        self.then_tabs.set_hexpand(True)
+        self.then_tabs.show_all()
 
         then_label = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         then_label.pack_start(Gtk.Label(label="Then", xalign=1), False, False, 0)
-        self.text_toggle = Gtk.ToggleButton(label="Text")
-        self.text_toggle.set_tooltip_text("Edit the macro as text")
-        self.text_toggle.connect("toggled", self._on_text_toggled)
-        then_label.pack_start(self.text_toggle, False, False, 0)
         then_label.set_valign(Gtk.Align.START)
         self.form.attach(then_label, 0, 2, 1, 1)
-        self.form.attach(self.then_stack, 1, 2, 1, 1)
+        self.form.attach(self.then_tabs, 1, 2, 1, 1)
 
         self.entry_error = Gtk.Label(xalign=0)
         self.entry_error.get_style_context().add_class("error")
@@ -672,11 +668,6 @@ class Window(Gtk.Window):
     def _current_variables(self) -> tuple[str, ...]:
         profile = self.controller.profile
         return profile.variables if profile is not None else ()
-
-    def _on_text_toggled(self, button: Gtk.ToggleButton) -> None:
-        self.then_stack.set_visible_child_name(
-            "text" if button.get_active() else "blocks"
-        )
 
     def _on_blocks_changed(self, chain: Chain, typing: bool) -> None:
         if self._refreshing:
