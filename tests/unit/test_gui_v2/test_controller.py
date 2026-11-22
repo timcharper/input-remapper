@@ -22,7 +22,11 @@ import unittest
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from inputremapper.gui_v2.controller import Controller, unique_name
+from inputremapper.gui_v2.controller import (
+    RECORD_BLOCKED_MESSAGE,
+    Controller,
+    unique_name,
+)
 from inputremapper.gui_v2.document import InputRef, Trigger
 from inputremapper.gui_v2.tree import Call
 
@@ -47,16 +51,34 @@ class FakeDaemon:
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
         self.fail: set[str] = set()
+        self.running: dict[str, str] = {}
 
     def start_injecting(self, group_key: str, preset: str) -> bool:
         self.calls.append(("start", group_key, preset))
-        return group_key not in self.fail
+        if group_key in self.fail:
+            return False
+        self.running[group_key] = preset
+        return True
 
     def set_config_dir(self, config_dir: str) -> None:
         self.config_dir = config_dir
 
     def stop_all(self) -> None:
         self.calls.append(("stop_all",))
+        self.running = {}
+
+    def get_running_preset(self, group_key: str) -> str:
+        return self.running.get(group_key, "")
+
+    def get_state(self, group_key: str) -> str:
+        return "RUNNING" if group_key in self.running else "UNKNOWN"
+
+
+class OldDaemon(FakeDaemon):
+    """A service that can say what runs, but not which preset."""
+
+    def get_running_preset(self, group_key: str) -> str:
+        raise AttributeError("DBus object has no attribute 'get_running_preset'")
 
 
 class TestController(unittest.TestCase):
@@ -141,6 +163,53 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.controller.active_profile, "New profile")
         written = self.presets / "Keyboard" / "[v2 read-only] New profile.json"
         self.assertEqual(json.loads(written.read_text())[0]["output_symbol"], "key(a)")
+
+    def test_toggle_stops_whatever_runs_even_another_profile(self) -> None:
+        self._profile_with_entry()
+        self.daemon.running = {"kbd": "my old preset"}
+        self.controller.sync_running()
+        self.assertTrue(self.controller.running)
+        self.controller.toggle_apply()
+        self.assertEqual(self.daemon.calls[-1], ("stop_all",))
+        self.assertFalse(self.controller.running)
+        self.assertTrue(self.controller.can_record)
+
+    def test_cannot_record_while_a_profile_runs(self) -> None:
+        self._profile_with_entry()
+        self.assertTrue(self.controller.can_record)
+        self.controller.toggle_apply()
+        self.assertFalse(self.controller.can_record)
+        self.controller.start_recording()
+        self.assertFalse(self.controller.recording)
+        self.assertEqual(self.controller.message, RECORD_BLOCKED_MESSAGE)
+        self.controller.toggle_apply()
+        self.assertTrue(self.controller.can_record)
+
+    def test_finds_a_profile_started_elsewhere(self) -> None:
+        self._profile_with_entry()
+        self.daemon.running = {"kbd": "[v2 read-only] New profile"}
+        self.controller.sync_running()
+        self.assertEqual(self.controller.active_profile, "New profile")
+        self.assertFalse(self.controller.can_record)
+        self.daemon.running = {}
+        self.controller.sync_running()
+        self.assertIsNone(self.controller.active_profile)
+        self.assertTrue(self.controller.can_record)
+
+    def test_finds_the_profile_from_its_devices_on_an_old_service(self) -> None:
+        self._profile_with_entry()
+        self.controller.daemon = OldDaemon()
+        self.controller.daemon.running = {"kbd": "whatever"}
+        self.controller.sync_running()
+        self.assertEqual(self.controller.active_profile, "New profile")
+        self.assertFalse(self.controller.can_record)
+
+    def test_a_v1_preset_running_blocks_recording(self) -> None:
+        self._profile_with_entry()
+        self.daemon.running = {"kbd": "my old preset"}
+        self.controller.sync_running()
+        self.assertIsNone(self.controller.active_profile)
+        self.assertFalse(self.controller.can_record)
 
     def test_toggle_stops_the_active_profile(self) -> None:
         self._profile_with_entry()

@@ -35,6 +35,7 @@ from inputremapper.configs.paths import PathUtils
 from inputremapper.gui_v2.document import Entry, InputRef, Profile, Workspace
 from inputremapper.gui_v2.recorder import RecorderError
 from inputremapper.gui_v2.render import (
+    RENDERED_PREFIX,
     RenderError,
     import_preset_file,
     is_rendered_name,
@@ -43,6 +44,7 @@ from inputremapper.gui_v2.render import (
 from inputremapper.gui_v2.store import load_workspace, save_workspace
 from inputremapper.gui_v2.tree import variables_used
 from inputremapper.gui_v2.undo import History
+from inputremapper.logging.logger import logger
 
 
 class GroupLike(Protocol):
@@ -73,6 +75,10 @@ class DaemonLike(Protocol):
 
     def stop_all(self) -> None: ...
 
+    def get_state(self, group_key: str) -> str: ...
+
+    def get_running_preset(self, group_key: str) -> str: ...
+
 
 @dataclass(frozen=True)
 class V1Preset:
@@ -90,6 +96,9 @@ def unique_name(base: str, taken: Collection[str]) -> str:
     while f"{base} {number}" in taken:
         number += 1
     return f"{base} {number}"
+
+
+RECORD_BLOCKED_MESSAGE = "Stop the running profile to record input"
 
 
 class Controller:
@@ -118,6 +127,9 @@ class Controller:
         )
         self.selected_entry: str | None = None
         self.active_profile: str | None = None
+        # Something the service runs that isn't one of our profiles, for example an
+        # autoloaded v1 preset.
+        self.other_running = False
         self.message: str = ""
         # A problem the user must acknowledge, shown as a dialog by the window.
         self.error: str | None = None
@@ -157,6 +169,85 @@ class Controller:
     @property
     def recording(self) -> bool:
         return self.recorder is not None and self.recorder.recording
+
+    @property
+    def running(self) -> bool:
+        """Whether the service runs anything at all, ours or not."""
+        return self.active_profile is not None or self.other_running
+
+    @property
+    def can_record(self) -> bool:
+        """A running profile grabs its devices, so nothing can be read from them."""
+        return not self.running
+
+    def sync_running(self) -> None:
+        """Ask the service what runs, because it may have been started elsewhere:
+        autoload, the old GUI, or an earlier session of this one."""
+        if self.daemon is None:
+            return
+        # {group key: preset name, or "" if the service can't say which}
+        running: dict[str, str] = {}
+        try:
+            for group in self.groups.get_groups():
+                name = self._running_preset(group.key)
+                if name is not None:
+                    running[group.key] = name
+        except Exception:  # a dbus hiccup shouldn't lose what we already know
+            return
+
+        active = self._active_profile_for(running)
+        other = bool(running) and active is None
+        if (active, other) != (self.active_profile, self.other_running):
+            logger.info(
+                "Running presets %s: v2 profile %s%s",
+                running or "none",
+                active or "none",
+                ", plus others" if other else "",
+            )
+            self.active_profile, self.other_running = active, other
+            self._changed()
+
+    def _running_preset(self, group_key: str) -> str | None:
+        """The preset running on that group ("" if unknown), or None if none."""
+        assert self.daemon is not None
+        try:
+            name = self.daemon.get_running_preset(group_key)
+        except Exception:  # older services don't have this method
+            name = ""
+        if name:
+            return name
+        state = str(self.daemon.get_state(group_key))
+        return "" if state in ("RUNNING", "STARTING") else None
+
+    def _active_profile_for(self, running: dict[str, str]) -> str | None:
+        """Which of our profiles is what's running, if any."""
+        if not running:
+            return None
+        named = {n[len(RENDERED_PREFIX) :] for n in running.values() if n}
+        if all(running.values()):
+            # The service told us every name; they must all be one of ours.
+            if len(named) == 1 and all(is_rendered_name(n) for n in running.values()):
+                (only,) = named
+                return only if self.workspace.get(only) is not None else None
+            return None
+        # Names unknown: the profile that covers exactly these devices.
+        matches = [
+            p.name
+            for p in self.workspace.profiles
+            if self._devices_of(p) == set(running)
+        ]
+        if self.selected_profile in matches:
+            return self.selected_profile
+        return matches[0] if len(matches) == 1 else None
+
+    def _devices_of(self, profile: Profile) -> set[str]:
+        """The connected devices the profile has mappings for. Doesn't render, so a
+        profile with a half-finished mapping still matches."""
+        return {
+            e.trigger.device
+            for e in profile.entries
+            if e.trigger.device and self._group_name_of(e.trigger.device) is not None
+        }
 
     def _changed(self) -> None:
         # Selections may point at things that undo or delete removed.
@@ -328,7 +419,10 @@ class Controller:
         entry = self.entry
         if entry is None:
             return
-        if self.recorder is None:
+        self.sync_running()
+        if not self.can_record:
+            self.message = RECORD_BLOCKED_MESSAGE
+        elif self.recorder is None:
             self.message = "Recording is not available"
         else:
             self.message = "Press the keys now, release them all to finish"
@@ -470,13 +564,12 @@ class Controller:
         if self.daemon is not None:
             self.daemon.stop_all()
         self.active_profile = None
+        self.other_running = False
         self.message = ""
         self._changed()
 
     def toggle_apply(self) -> None:
-        if self.active_profile is not None and self.active_profile == (
-            self.selected_profile
-        ):
+        if self.running:
             self.stop()
         else:
             self.apply()

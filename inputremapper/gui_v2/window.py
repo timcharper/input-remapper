@@ -37,7 +37,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from inputremapper.gui_v2.blocks import BlockEditor, stylesheet
-from inputremapper.gui_v2.controller import Controller
+from inputremapper.gui_v2.controller import RECORD_BLOCKED_MESSAGE, Controller
 from inputremapper.gui_v2.document import Entry
 from inputremapper.gui_v2.macro_text import (
     MacroTextError,
@@ -51,6 +51,8 @@ from inputremapper.gui_v2.trigger_text import (
 )
 
 ACTIVE_MARK = "▶"
+# The mark is drawn in this color, so it reads as "running" at a glance.
+ACTIVE_MARK_COLOR = "#2ec27e"
 NEW_PROFILE = "<new profile>"
 
 
@@ -130,7 +132,14 @@ class Window(Gtk.Window):
         self.add(outer)
 
         controller.subscribe(self.schedule_refresh)
+        controller.sync_running()
+        # Profiles can be started or stopped from outside this window.
+        GLib.timeout_add_seconds(3, self._poll_running)
         self.refresh()
+
+    def _poll_running(self) -> bool:
+        self.controller.sync_running()
+        return True
 
     @staticmethod
     def _install_css() -> None:
@@ -174,7 +183,7 @@ class Window(Gtk.Window):
         self.profile_combo = Gtk.ComboBox(model=self.profile_store)
         renderer = Gtk.CellRendererText()
         self.profile_combo.pack_start(renderer, True)
-        self.profile_combo.add_attribute(renderer, "text", 1)
+        self.profile_combo.add_attribute(renderer, "markup", 1)
         self.profile_combo.set_size_request(240, -1)
         self.profile_combo.connect("changed", self._on_profile_chosen)
         bar.pack_start(self.profile_combo, False, False, 0)
@@ -366,12 +375,17 @@ class Window(Gtk.Window):
             self._profile_keys = tuple(keys)
             store.clear()
             for name in names:
-                store.append([name, name])
-            store.append([NEW_PROFILE, "+ New profile"])
+                store.append([name, GLib.markup_escape_text(name)])
+            store.append([NEW_PROFILE, GLib.markup_escape_text("+ New profile")])
         for row, name in zip(store, names, strict=False):
-            mark = f"{ACTIVE_MARK} " if name == c.active_profile else ""
-            if row[1] != f"{mark}{name}":
-                row[1] = f"{mark}{name}"
+            label = GLib.markup_escape_text(name)
+            if name == c.active_profile:
+                label = (
+                    f'<span foreground="{ACTIVE_MARK_COLOR}">{ACTIVE_MARK}</span> '
+                    f"{label}"
+                )
+            if row[1] != label:
+                row[1] = label
 
         wanted = c.selected_profile
         current = self.profile_combo.get_active()
@@ -389,9 +403,7 @@ class Window(Gtk.Window):
         ):
             button.set_sensitive(has_profile)
         self.add_combo.set_sensitive(has_profile)
-        playing = (
-            c.selected_profile is not None and c.selected_profile == c.active_profile
-        )
+        playing = c.running
         self.play_button.set_image(
             Gtk.Image.new_from_icon_name(
                 (
@@ -402,7 +414,9 @@ class Window(Gtk.Window):
                 Gtk.IconSize.BUTTON,
             )
         )
-        self.play_button.set_tooltip_text("Stop" if playing else "Apply")
+        self.play_button.set_tooltip_text(
+            "Stop all running profiles" if playing else "Apply"
+        )
 
     def _make_entry_row(self, entry_id: str) -> KeyedRow:
         delete = Gtk.Button.new_from_icon_name(
@@ -446,9 +460,14 @@ class Window(Gtk.Window):
                 Gtk.IconSize.BUTTON,
             )
         )
-        self.record_button.set_tooltip_text(
-            "Stop recording" if c.recording else "Record keys from the device"
-        )
+        self.record_button.set_sensitive(c.recording or c.can_record)
+        if c.recording:
+            tooltip = "Stop recording"
+        elif not c.can_record:
+            tooltip = RECORD_BLOCKED_MESSAGE
+        else:
+            tooltip = "Record keys from the device"
+        self.record_button.set_tooltip_text(tooltip)
         if entry is None:
             self._set_text(self.entry_name, "")
             self._set_text(self.trigger_entry, "")
